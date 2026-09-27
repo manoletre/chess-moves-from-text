@@ -1,0 +1,43 @@
+# Hand-labelled examples. One example per line. Lines starting with # are ignored.
+#   [[Qxd5]]  START:  a move played from the current position
+#   [[>Ne2]]  CONT:   continues the previous move (a series / line)
+#   [[@e4]]   SQUARE:   a square ("the pawn on [[@e4]]")
+#   [[|c-file]]  FILE, [[_7th rank]]  RANK, [[/a1-h8]]  DIAGONAL ("the [[/a1-h8]] diagonal")
+# Vague ones the app can't resolve ("the long diagonal", "the back rank") stay unmarked.
+# Use \n for a line break inside an example.
+# These go ONLY into the test set, so they measure performance on text the
+# templates never produced. Paste real chess-tutor output here as you collect it.
+Stockfish prefers Black's [[Bxe6]] over [[Qxd2+]]. In this short search, [[Qxd2+]] loses about 5.7 pawns of evaluation. The game continued [[Qxd2+]]. Stockfish's line after [[Bxe6]] begins [[Bxe6]] [[>Nf3]] [[>Nf6]] [[>Nc3]] [[>Bd6]] [[>Be2]] [[>O-O]] [[>O-O]].
+Stockfish prefers Black's [[Qxd5]] over [[Nb8]]. In this short search, [[Nb8]] loses about 1.8 pawns of evaluation. The game continued [[Nb8]] [[>Nf3]] [[>c6]] [[>dxc6]] [[>Nf6]] [[>Nd5]] [[>c7]]. Stockfish's line after [[Qxd5]] begins [[Qxd5]] [[>Ne2]].
+[[Nb8]] was a mistake because it opens the position to active counterplay. The key continuation Stockfish chose was:\n\n**[[Qxd5]]**\n(which leads to a sharp, balanced game)\n\nThis move puts pressure on Black's [[@d5]] pawn and opens lines for White to develop quickly.
+Why was [[Nb8]] a mistake? Show the key continuation.
+White's [[Qh5]] lets Black play [[>Qxf2#]] on the very next move: checkmate. Stockfish preferred White's [[Nf3]] instead. That immediate mate is why [[Qh5]] is a blunder.
+After White's [[Nf3]], [[@e5]] is occupied by a Black pawn. White controls it with knight on [[@f3]], pawn on [[@d4]]; Black controls it with knight on [[@c6]]. The game continued [[Nf3]] [[>Nc6]] [[>Bb5]] [[>a6]].
+[[Rxe8+]] · Mistake · Stockfish prefers [[Qd3]]
+The problem with [[h3]] is that it wastes a tempo. Black gets to play [[>d5]] and the center opens while White's king is still on [[@e1]].
+Your move [[Bg5]] pins the knight on [[@f6]], but after [[>h6]] the bishop has to decide where to go. [[Be3]] was a bit more flexible.
+The pawn on [[@d5]] is strong. If Black plays [[c6]], White can answer with [[>dxc6]] and the [[|d-file]] opens.
+After 23...[[Rd8]] 24. [[>Qe2]] [[>Rxd1+]] 25. [[>Rxd1]] the position is equal (0.00).
+Great question! **[[Nd5]]** is strong because the knight can't be kicked by a pawn anymore, and it eyes both [[@c7]] and [[@e7]].
+You can't play [[Bxh7+]] here: after [[>Kxh7]] [[>Ng5+]] [[>Kg8]] White has nothing, because the queen can't reach [[@h5]].
+The engine score is +1.3 for White. The main plan is [[Rc1]], doubling rooks on the [[|c-file]].
+The game finished 1-0 after 41 moves. Black resigned in a lost rook endgame.
+The [[/a1-h8]] diagonal is completely open, so the bishop on [[@b2]] is a monster.
+Promotion wins: [[b8=Q+]] [[>Kxb8]] [[>c7+]] [[>Kb7]] [[>c8=Q+]].
+If [[exd5]], then [[>Nxd5]] and Black has a comfortable game.
+Black should castle long with [[O-O-O]], putting the king on [[@c8]] and the rook on [[@d8]].
+After [[0-0]], Black gets [[>Ng4]]; that's why [[Re1]] first was more precise.
+Move 12 was the turning point. White played [[g4]]?! and after [[>Nxg4]] the kingside fell apart.
+The knight wants to go from [[@g1]] to [[@f3]] and then to [[@e5]].
+I think the pawn to [[@e5]] is the key idea: [[e5]] kicks the knight from [[@f6]] and gains space.
+Stockfish's top three moves are [[Nbd7]], [[Re8]] and [[h6]], all within 0.2 of each other.
+What do you think about [[Qb3]]? It attacks [[@b7]] and [[@f7]] at the same time.
+Rating 1850, rapid 15+10, played online. Result: 0-1.
+[[Ne5]]! centralizes the knight and hits both [[@c6]] and [[@f7]]. After [[>Bxe5]] [[>dxe5]] White's bishop pair is strong.
+The weak squares [[@d5]] and [[@f5]] are perfect outposts for the knights.
+Print it on A4 paper and meet me in room B12; the tournament hall is E4.
+A rook on the [[_7th rank]] is worth a pawn here. After [[Rd7]] [[>Rf8]] [[>Rxb7]] White is winning.
+The bishop on [[@g2]] stares down the long diagonal, and the [[|e file]] is still closed.
+Black's back rank is weak: [[Qe8+]] [[>Rxe8]] [[>Rxe8#]] is mate.
+Upload your PGN file and I'll check it. You're ranked 3rd in the club, by the way.
+[[Bb3]] keeps the bishop on the diagonal [[/a2-g8]] and pins the pawn on [[@f7]] to the king on [[@g8]].
