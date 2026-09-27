@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Annotator: a chess move &amp; board-location tagger</title>
+  <meta name="description" content="Paste chess commentary and see every move, square, file, rank and diagonal found by a fine-tuned LFM2.5 encoder.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..800;1,9..144,300..800&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="masthead reveal">
+    <div class="masthead__meta">
+      <span>Model v1</span>
+      <span>LFM2.5-Encoder-230M, fine-tuned</span>
+      <span id="status" class="status status--loading">connecting…</span>
+    </div>
+    <h1>The <em>Annotator</em></h1>
+    <p class="dek">
+      Paste chess commentary. A small encoder model reads it and marks every <b>move</b> and every
+      <b>square</b>, <b>file</b>, <b>rank</b> and <b>diagonal</b>, so that
+      <a href="#about">chess-tutor</a> can make them clickable.
+    </p>
+  </header>
+
+  <main class="desk">
+    <div class="column">
+      <section class="card input reveal" aria-labelledby="input-title">
+        <div class="card__head">
+          <h2 id="input-title">Commentary</h2>
+          <span class="hint"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
+        </div>
+        <textarea id="text" spellcheck="false" maxlength="5000"></textarea>
+        <div class="input__foot">
+          <div class="examples" id="examples" aria-label="Examples"></div>
+          <button id="analyze" class="button" type="button">Annotate</button>
+        </div>
+      </section>
+
+      <section class="card output reveal" aria-labelledby="output-title" aria-live="polite">
+        <div class="card__head">
+          <h2 id="output-title">Annotated</h2>
+          <span class="hint" id="timing"></span>
+        </div>
+        <ul class="legend" id="legend"></ul>
+        <div class="annotated" id="annotated"><p class="placeholder">Press <em>Annotate</em> to read the text.</p></div>
+        <div class="series" id="series-block" hidden>
+          <h3>Move series <span class="hint">each one starts from the current position</span></h3>
+          <ol id="series-list"></ol>
+        </div>
+        <details class="raw">
+          <summary>Raw API response</summary>
+          <pre id="raw">{}</pre>
+        </details>
+      </section>
+    </div>
+
+    <aside class="board-panel reveal" aria-label="Board preview">
+      <div class="board-frame">
+        <div class="board" id="board" role="img" aria-label="Chessboard with highlighted squares"></div>
+      </div>
+      <div class="readout" id="readout">
+        <p class="readout__kicker">Board preview</p>
+        <p class="readout__body">Hover or tap anything highlighted in the text. Locations light up here; moves show the series you would replay by clicking them.</p>
+      </div>
+    </aside>
+  </main>
+
+  <section class="docs" id="about">
+    <div class="docs__intro">
+      <p class="kicker">About the model</p>
+      <h2>Why a model, and not a regular expression?</h2>
+      <p class="lede">
+        Because <code>e4</code> is a move in <q>White played e4</q>, a square in <q>the pawn on e4</q>, and
+        part of a series in <q>the game continued Nb8 Nf3 e4</q>. Only the context tells them apart.
+      </p>
+    </div>
+
+    <div class="docs__grid">
+      <article>
+        <h3>What it does</h3>
+        <p>
+          The tagger reads a piece of text and labels every chess reference in it with one of six types,
+          returning exact character positions. It only <em>detects</em>. Turning the detections into links,
+          board highlights and move replays is the job of the app that uses it:
+          <strong>chess-tutor</strong>, an AI chess tutor whose explanations become interactive.
+        </p>
+        <table class="types">
+          <thead><tr><th>Type</th><th>Example</th><th>In the app, clicking it…</th></tr></thead>
+          <tbody>
+            <tr><td><span class="tag tag--START">START</span></td><td>prefers <b>Qxd5</b></td><td>plays the move from the current position</td></tr>
+            <tr><td><span class="tag tag--CONT">CONT</span></td><td>continued Nb8 <b>Nf3 c6</b></td><td>replays the series up to that move</td></tr>
+            <tr><td><span class="tag tag--SQUARE">SQUARE</span></td><td>the pawn on <b>d5</b></td><td>highlights the square</td></tr>
+            <tr><td><span class="tag tag--FILE">FILE</span></td><td>the <b>c-file</b> is open</td><td>highlights the column</td></tr>
+            <tr><td><span class="tag tag--RANK">RANK</span></td><td>a rook on the <b>7th rank</b></td><td>highlights the row</td></tr>
+            <tr><td><span class="tag tag--DIAGONAL">DIAGONAL</span></td><td>the <b>a1-h8</b> diagonal</td><td>highlights the diagonal</td></tr>
+          </tbody>
+        </table>
+        <p class="small">
+          The <em>current position</em> is the one before the move being discussed. A single move is a START
+          with nothing after it; a series is a START followed by CONTs. Vague references like
+          <q>the long diagonal</q> or <q>the back rank</q> are deliberately left unlabelled.
+        </p>
+      </article>
+
+      <article>
+        <h3>How it works</h3>
+        <ol class="steps">
+          <li><b>Tokenize.</b> The text is split into tokens: <code>Qxd5</code> becomes <code>&nbsp;Q</code> <code>x</code> <code>d</code> <code>5</code>.</li>
+          <li><b>Encode.</b> <a href="https://huggingface.co/LiquidAI/LFM2.5-Encoder-230M">LFM2.5-Encoder-230M</a> reads all tokens at once, in both directions, and turns each one into 1024 numbers describing it in context.</li>
+          <li><b>Classify.</b> A small head (a 1024&nbsp;×&nbsp;13 linear layer) scores 13 labels per token: <code>O</code> plus <code>B-</code>/<code>I-</code> (first/other token) for each of the six types.</li>
+          <li><b>Decode.</b> Tokens are merged back into character spans, and stray punctuation like <code>,</code> <code>!?</code> <code>**</code> is trimmed, keeping <code>+</code> <code>#</code> <code>=</code>.</li>
+        </ol>
+        <p class="small">
+          Trained end-to-end on 1,000 synthetic examples: real legal positions from <code>python-chess</code>
+          dropped into chess-tutor-style sentences, with look-alikes (<code>A4</code>, <code>Room B12</code>,
+          <q>the PGN file</q>) mixed in as negatives. 8 epochs on a Colab T4.
+        </p>
+      </article>
+
+      <article>
+        <h3>How well it works</h3>
+        <p class="small">Test set: 184 texts the model never trained on. 150 come from sentence templates held out of training; 34 are hand-written, including real chess-tutor output. A span counts only if its start, end <em>and</em> type are all exactly right.</p>
+        <dl class="scores">
+          <div><dt>F1</dt><dd>0.944</dd><span>span + type</span></div>
+          <div><dt>Detection F1</dt><dd>0.997</dd><span>span, any type</span></div>
+          <div><dt>Moves</dt><dd>0.93 / 0.95</dd><span>START / CONT</span></div>
+          <div><dt>Locations</dt><dd>0.94 · 1.00</dd><span>squares · files, ranks, diagonals</span></div>
+        </dl>
+        <h4>Known limitations</h4>
+        <ul class="small">
+          <li>It almost never misses a reference; mistakes are about the <em>type</em>. Unfamiliar phrasings like <q>only after dxe5 play h4</q> can make a CONT look like a START.</li>
+          <li>A square named with a verb right after a series (<q>…Nxe5, the knight eyes f7</q>, <q>hitting d5</q>) is often read as the next move of that series; <q>the pawn on d5</q> is recognised correctly.</li>
+          <li>A square at the start of a list (<q>squares like d8 and c1</q>) is sometimes read as a move.</li>
+          <li>Castling written with zeros (<code>0-0</code>) and move numbers after results (<code>0-1; 9. Bxb5</code>) can confuse it.</li>
+          <li>It can't express side branches, or lines that start somewhere other than the current position. The app should replay each series and only link it if every move is legal.</li>
+          <li>Ranks are often counted from the speaker's side (Black's <q>7th rank</q> is White's 2nd).</li>
+        </ul>
+      </article>
+
+      <article>
+        <h3>Use the API</h3>
+        <pre class="code"><code>curl -s localhost:8000/api/tag \
+  -H 'content-type: application/json' \
+  -d '{"text": "The game continued Nb8 Nf3, and the pawn on d5 falls."}'</code></pre>
+        <pre class="code"><code>{
+  "spans": [
+    {"start": 19, "end": 22, "type": "START", "text": "Nb8", "series": 0, "index": 0},
+    {"start": 23, "end": 26, "type": "CONT",  "text": "Nf3", "series": 0, "index": 1},
+    {"start": 44, "end": 46, "type": "SQUARE", "text": "d5"}
+  ],
+  "series": [[…Nb8, …Nf3]],
+  "highlights": [{…d5}],
+  "truncated": false
+}</code></pre>
+        <p class="small">Texts longer than 512 tokens are cut off (<code>truncated: true</code>). Everything runs locally on CPU; the model is about 920&nbsp;MB and uses about 1.1&nbsp;GB of memory.</p>
+      </article>
+    </div>
+  </section>
+
+  <footer class="colophon">
+    <span>chess-moves-from-text · model v1</span>
+    <span>Built on LiquidAI/LFM2.5-Encoder-230M (LFM Open License v1.0)</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
