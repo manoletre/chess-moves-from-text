@@ -1,0 +1,32 @@
+[
+  {
+    "label": "Engine report",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "text": "Stockfish prefers Black's Bc5 over Nd4. In this short search, Nd4 loses about 1.1 pawns of evaluation. The game continued Nd4 Nxe5 Qg5 Nxf7 Qxg2 Rf1 Qxe4+ Be2 Nf3#. Stockfish's line after Bc5 begins Bc5 c3 Nf6 d4 exd4.\n\nNd4 sets a trap: the pawn on e5 looks free, but taking it opens the g-file for Black's queen."
+  },
+  {
+    "label": "Tutor chat",
+    "fen": "r1bqkb1r/ppp2ppp/2n2n2/3Pp1N1/2B5/8/PPPP1PPP/RNBQK2R b KQkq - 0 5",
+    "text": "Nxd5 walks into the Fried Liver Attack. The critical line is Nxd5 **Nxf7!** Kxf7 Qf3+ Ke6 Nc3, and the black king is stuck on e6 in the middle of the board.\n\nStockfish prefers **Na5**, hitting the bishop on c4, which rakes the a2-g8 diagonal."
+  },
+  {
+    "label": "Square or move?",
+    "fen": "rnbqkbnr/ppp2ppp/3p4/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq - 0 3",
+    "text": "The pawn on e5 is under fire. Black can give up the centre with exd4, and after Nxd4 the knight sits on d4 in the middle of the board. Keeping the tension with Nd7 is the other option, but then dxe5 dxe5 Bc4 puts pressure on f7."
+  },
+  {
+    "label": "Files, ranks & diagonals",
+    "fen": "r2q1rk1/pb1nbppp/5n2/2pp2B1/8/2NBPN2/PP3PPP/2RQ1RK1 w - - 0 12",
+    "text": "Black's hanging pawns on c5 and d5 control the centre, but they are also targets. White wants rooks on the d-file and the c-file: Qe2 Qa5 Rfd1 is the typical plan, and the bishop on b7 has to keep watching the a8-h1 diagonal. Nothing is happening on the 8th rank yet."
+  },
+  {
+    "label": "Not chess talk",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "text": "Before we start: save the PGN file, and check your rank on the club ladder (you finished 3rd). Now the game. e4 e5 Nf3 attacks the pawn on e5, and Nc6 defends it. The e-file stays closed for now."
+  },
+  {
+    "label": "Opening line",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "text": "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7: the main line of the Ruy Lopez. White's bishop sits on the a4-e8 diagonal, and a rook will soon come to the e-file."
+  }
+]

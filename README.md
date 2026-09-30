@@ -4,7 +4,9 @@ A small model that reads chess commentary and finds every **move** and every **s
 
 The model is [LiquidAI/LFM2.5-Encoder-230M](https://huggingface.co/LiquidAI/LFM2.5-Encoder-230M) fine-tuned for token classification. It only *detects*. Turning detections into links, highlights and move replays is the app's job.
 
-![Demo: hovering dxc6 shows the series Nb8 → Nf3 → c6 → dxc6 on the board](docs/demo.png)
+**Live demo: [chess-annotator.vercel.app](https://chess-annotator.vercel.app)**. The model runs in your browser; nothing is sent to a server.
+
+![Demo: hovering Nf3# replays the whole series from the current position, ending in checkmate](docs/demo.png)
 
 ## What it finds
 
@@ -28,21 +30,42 @@ Stockfish prefers Black's [[Qxd5]] over [[Nb8]]. The game continued [[Nb8]] [[>N
 
 Clicking `dxc6` replays Nb8 → Nf3 → c6 → dxc6 from the current position.
 
+A series doesn't have to be written in one go. A `CONT` continues the most recent series, however much text sits in between, and a new `START` begins a new series from the current position:
+
+```
+3...[[f6]] allows 4.[[>Bc4]], bringing the bishop to [[@c4]]. The best answer would then be 4...[[>exd4]]. A better move was 3...[[exd4]], leading to 4.[[>Nxd4]].
+    START           CONT                             SQUARE                                     CONT                             START                  CONT
+```
+
 Why a model and not a regex: `e4` is a move in "White played e4", a square in "the pawn on e4", and part of a series in "the game continued Nb8 Nf3 e4"; "the c-file" is a file but "the PGN file" is nothing. Only the context tells them apart.
 
-## Model v1 results
+## Results (model v2)
 
-Scored on 184 test texts the model never trained on: 150 from sentence templates held out of training, plus 34 hand-written ones, including real chess-tutor output. A span counts only if its start, end **and** type are exactly right (`python scripts/evaluate.py`).
+Scored on 294 test texts the model never trained on: 150 from sentence templates held out of training, 100 from held-out *series* templates, and 44 hand-written ones, including real chess-tutor output. A span counts only if its start, end **and** type are exactly right (`python scripts/evaluate.py`).
 
-| | F1 |
-|---|---|
-| **all spans, correct type** | **0.944** |
-| all spans, any type (detection) | 0.997 |
-| START / CONT | 0.932 / 0.947 |
-| SQUARE | 0.936 |
-| FILE / RANK / DIAGONAL | 1.00 / 1.00 / 1.00 |
+| | F1 v2 | F1 v1 |
+|---|---|---|
+| **all spans, correct type** | **0.958** | 0.881 |
+| all spans, any type (detection) | 0.996 | 0.998 |
+| START / CONT | 0.943 / 0.976 | 0.868 / 0.882 |
+| SQUARE | 0.898 | 0.867 |
+| FILE / RANK / DIAGONAL | 1.00 / 1.00 / 1.00 | 0.97 / 1.00 / 1.00 |
 
-It almost never misses a reference; nearly all mistakes are about the **type**:
+By test group:
+
+| test group | examples | F1 v2 | F1 v1 |
+|---|---|---|---|
+| held-out templates | 150 | 0.953 | 0.945 |
+| held-out *series* templates | 100 | **0.961** | 0.824 |
+| hand-written | 44 | **0.961** | 0.894 |
+
+**What changed in v2: series that continue after prose.** v1 learned that a `CONT` comes right after its series. When a tutor names a move, talks about it and only later continues the line ("Keeping the tension with Nd7 is the other option, but then **dxe5** dxe5 Bc4…"), v1 often started a new series at `dxe5` instead. v2 is trained with the same notebook on 500 extra examples of exactly this (`SERIES_TEMPLATES` in `data/generate_dataset.py`); the labels are unchanged.
+
+The browser demo runs a 4-bit copy of the model (145 MB instead of 920 MB) that scores 0.953 instead of 0.958.
+
+### Known limitations
+
+It almost never misses a reference; nearly all mistakes are about the **type**. These were found with v1:
 
 - **Unfamiliar phrasings of a series.** In "I would start with e5, and only after **dxe5** play h4", `dxe5` is read as a START instead of a CONT.
 - **A square named with a verb right after a series** ("…Nxe5, the knight eyes **f7**", "hitting **d5**") is often read as the next move of that series. "The pawn on d5" works.
@@ -57,25 +80,37 @@ The fix for most of these is more varied training data: add the failing phrasing
 
 ### 1. Download it
 
-The weights (~920 MB) live in the [GitHub release](https://github.com/manoletre/chess-moves-from-text/releases/tag/model-v1.0.0), not in git:
+The weights live in the [GitHub release](https://github.com/manoletre/chess-moves-from-text/releases/tag/model-v2.0.0), not in git:
 
 ```bash
-gh release download model-v1.0.0 --pattern 'chess-move-tagger-v1.zip'
-unzip chess-move-tagger-v1.zip        # creates ./chess-move-tagger/
+gh release download model-v2.0.0 --pattern 'chess-move-tagger-v2.zip'
+unzip chess-move-tagger-v2.zip        # creates ./chess-move-tagger/ (~920 MB, for Python)
 ```
 
-### 2. Run the demo web app
+The release also has `chess-move-tagger-v2-web.zip`, the 4-bit browser model. Unzip it into `web/` to get `web/model/` without exporting it yourself.
+
+### 2. Run the demo page
+
+The page in `web/` is static: the model runs in the browser with [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). It needs the browser model in `web/model/`, either from the release (above) or exported from `chess-move-tagger/`:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r app/requirements.txt
-uvicorn app.server:app --port 8000     # from the repo root
+pip install -r requirements-model.txt
+python scripts/export_onnx.py          # chess-move-tagger/ -> web/model/ (4-bit, in 50 MB parts)
+python -m http.server 8000 --directory web
 open http://localhost:8000
 ```
 
-Paste any text and hover the highlights: locations light up on the board, and moves show the series you'd replay by clicking them. The page also documents the model. It runs on CPU and uses about 1.1 GB of memory; the first request after startup can be slow while the model warms up.
+Pick an example or type your own text. Hover the highlights: locations light up on the board, and hovering a move replays its series from the example's position with [chess.js](https://github.com/jhlywa/chess.js). Moves that can't be played from that position are crossed out. That's either a model mistake or text about another position, and it's the same check chess-tutor should do before linking a series. Typed text starts from the initial position.
 
-### 3. Or call it from Python / HTTP
+The first visit downloads 145 MB; after that the browser keeps the model in its cache. Tagging a text takes about 0.2 s.
+
+To deploy it (Vercel's free plan rejects files over 100 MB, hence the parts):
+
+```bash
+cd web && npx vercel deploy --prod
+```
+
+### 3. Or call it from Python
 
 ```python
 from chess_tagger import ChessTagger
@@ -88,7 +123,7 @@ tagger.tag("The game continued Nb8 Nf3, and the pawn on d5 falls.")
 #  "series": [[...Nb8, ...Nf3]], "highlights": [...d5], "truncated": false}
 ```
 
-The web app exposes the same thing as `POST /api/tag` with `{"text": "..."}`. Texts longer than 512 tokens are cut off (`"truncated": true`).
+Texts longer than 512 tokens are cut off (`"truncated": true`). `pip install -r requirements-model.txt` first. In JavaScript, `web/tagger.js` returns the same shape.
 
 ## How it works
 
@@ -112,19 +147,21 @@ The notebook is written for a first-time encoder trainer. Every step (tokens, BI
 ## Layout
 
 ```
-app/
-  server.py             # FastAPI demo: serves the page + POST /api/tag
-  static/               # the demo page (HTML/CSS/JS), including the model documentation
+web/                    # the demo page (static; deployed to Vercel)
+  tagger.js             # tokenizer + ONNX Runtime Web inference + decoding (mirrors chess_tagger/model.py)
+  app.js                # editable text, highlights, board
+  model/                # browser model, not in git (scripts/export_onnx.py or the release)
 chess_tagger/
   model.py              # load the trained model and tag text (mirrors the notebook)
 scripts/
   evaluate.py           # span-level precision / recall / F1 on a dataset split
+  export_onnx.py        # trained model -> 4-bit ONNX for the browser (web/model/)
 data/
   generate_dataset.py   # synthetic data: real legal moves (python-chess) + chess-tutor-style templates
   handwritten.txt       # hand-labelled examples, test set only; add real chess-tutor output here
-  train.jsonl           # 1000 examples
-  val.jsonl             #  150 examples, same templates as train (used to pick the best epoch)
-  test.jsonl            #  184 examples: held-out templates + handwritten.txt
+  train.jsonl           # 1500 examples: 1000 v1 + 500 series-after-prose (v2)
+  val.jsonl             #  225 examples, same templates as train (used to pick the best epoch)
+  test.jsonl            #  294 examples: held-out templates + held-out series templates + handwritten.txt
 notebooks/
   train_chess_move_tagger.ipynb
 ```

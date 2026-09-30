@@ -1,6 +1,0 @@
-# Serving the trained model (demo web app + scripts/evaluate.py)
-torch>=2.4
-transformers>=5.1
-safetensors
-fastapi
-uvicorn
