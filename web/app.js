@@ -9,8 +9,6 @@ ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/di
 const FILES = "abcdefgh";
 const ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"];
 const START_FEN = new Chess().fen();
-// Filled glyphs for both colours (styled in CSS); U+FE0E forces text, not emoji, rendering.
-const GLYPHS = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 
 const $ = (selector) => document.querySelector(selector);
 const editor = $("#text");
@@ -41,9 +39,9 @@ for (let rank = 8; rank >= 1; rank--) {
 function drawPosition(game, { lit = [], color = null, lastMove = null, steps = {} } = {}) {
   for (const [name, cell] of Object.entries(squares)) {
     const piece = game.get(name);
+    const image = piece ? `url(pieces/${piece.color}${piece.type.toUpperCase()}.svg)` : "none";
     const glyph = cell.querySelector(".sq__piece");
-    glyph.textContent = piece ? GLYPHS[piece.type] + "︎" : "";
-    glyph.className = `sq__piece${piece ? ` sq__piece--${piece.color}` : ""}`;
+    if (glyph.style.backgroundImage !== image) glyph.style.backgroundImage = image;
     cell.classList.remove("is-lit", "is-from", "is-to");
     cell.style.removeProperty("--lit");
     cell.style.removeProperty("--d");
