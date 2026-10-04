@@ -92,6 +92,93 @@ function markStep(name, number, isStart) {
   cell.insertAdjacentHTML("beforeend", `<span class="sq__step${isStart ? " sq__step--start" : ""}">${number}</span>`);
 }
 
+// ------------------------------------------------------- FEN position
+
+// Solid glyphs for both sides (styled by colour in CSS); U+FE0E keeps them from rendering as emoji
+const GLYPHS = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const PIECE_NAMES = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
+const FEN_KEY = "annotator.fen";
+const fenInput = $("#fen");
+const fenError = $("#fen-error");
+
+// Returns {square: "P" | "n" | …}, or throws with a readable message. Only the placement field is drawn.
+function parseFen(fen) {
+  const fields = fen.trim().split(/\s+/);
+  if (fields.length !== 1 && fields.length !== 6) {
+    throw new Error("Enter piece placement alone or a complete 6-field FEN.");
+  }
+  const [placement, turn, castling, enPassant, halfmove, fullmove] = fields;
+  const rows = placement.split("/");
+  if (rows.length !== 8) throw new Error(`Expected 8 ranks separated by "/", got ${rows.length}.`);
+  if (fields.length === 6) {
+    if (!/^[wb]$/.test(turn)) throw new Error('Side to move must be "w" or "b".');
+    if (!/^(?:-|K?Q?k?q?)$/.test(castling) || !castling) throw new Error("Invalid castling rights.");
+    if (!/^(?:-|[a-h][36])$/.test(enPassant) ||
+        (enPassant !== "-" && enPassant[1] !== (turn === "w" ? "6" : "3"))) {
+      throw new Error("Invalid en passant square for the side to move.");
+    }
+    if (!/^\d+$/.test(halfmove) || !Number.isSafeInteger(Number(halfmove))) {
+      throw new Error("Halfmove clock must be a nonnegative integer.");
+    }
+    if (!/^[1-9]\d*$/.test(fullmove) || !Number.isSafeInteger(Number(fullmove))) {
+      throw new Error("Fullmove number must be a positive integer.");
+    }
+  }
+  const pieces = {};
+  rows.forEach((row, i) => {
+    const rank = 8 - i;
+    if (/[1-8]{2}/.test(row)) throw new Error(`Rank ${rank} has adjacent empty-square counts.`);
+    let f = 0;
+    for (const c of row) {
+      if (/[1-8]/.test(c)) f += Number(c);
+      else if (/[pnbrqk]/i.test(c)) { if (f < 8) pieces[FILES[f] + rank] = c; f++; }
+      else throw new Error(`Unexpected "${c}" on rank ${rank}.`);
+    }
+    if (f !== 8) throw new Error(`Rank ${rank} ("${row}") covers ${f} squares, not 8.`);
+  });
+  return pieces;
+}
+
+function placePieces(pieces) {
+  for (const [name, cell] of Object.entries(squares)) {
+    cell.querySelector(".piece")?.remove();
+    const p = pieces[name];
+    if (!p) continue;
+    const white = p === p.toUpperCase();
+    const piece = document.createElement("span");
+    piece.className = `piece piece--${white ? "w" : "b"}`;
+    piece.textContent = GLYPHS[p.toLowerCase()] + "︎";
+    piece.title = `${white ? "White" : "Black"} ${PIECE_NAMES[p.toLowerCase()]} on ${name}`;
+    cell.append(piece);
+  }
+  board.setAttribute("aria-label", Object.keys(pieces).length
+    ? `Chessboard with ${Object.keys(pieces).length} pieces and highlighted squares`
+    : "Chessboard with highlighted squares");
+}
+
+function setFen(fen) {
+  try {
+    placePieces(fen.trim() ? parseFen(fen) : {});
+    fenError.textContent = "";
+    fenInput.removeAttribute("aria-invalid");
+    localStorage.setItem(FEN_KEY, fen.trim());
+  } catch (error) {
+    fenError.textContent = error.message;
+    fenInput.setAttribute("aria-invalid", "true");
+  }
+}
+
+fenInput.addEventListener("input", () => setFen(fenInput.value));
+$("#fen-form").addEventListener("submit", (e) => { e.preventDefault(); setFen(fenInput.value); });
+$("#fen-form").addEventListener("click", (e) => {
+  const preset = e.target.closest("[data-fen]");
+  if (!preset) return;
+  fenInput.value = preset.dataset.fen;
+  setFen(fenInput.value);
+});
+fenInput.value = localStorage.getItem(FEN_KEY) ?? "";
+setFen(fenInput.value);
+
 // ------------------------------------------------- text -> board squares
 // The model only finds the text; turning "c-file" into squares is the app's job.
 

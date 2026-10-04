@@ -61,6 +61,17 @@
       <div class="board-frame">
         <div class="board" id="board" role="img" aria-label="Chessboard with highlighted squares"></div>
       </div>
+      <form class="fen" id="fen-form" autocomplete="off">
+        <div class="fen__head">
+          <label for="fen">Position (FEN)</label>
+          <span class="fen__presets">
+            <button type="button" class="example" data-fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1">Start</button>
+            <button type="button" class="example" data-fen="">Clear</button>
+          </span>
+        </div>
+        <input id="fen" type="text" spellcheck="false" placeholder="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" aria-describedby="fen-error">
+        <p class="fen__error" id="fen-error" aria-live="polite"></p>
+      </form>
       <div class="readout" id="readout">
         <p class="readout__kicker">Board preview</p>
         <p class="readout__body">Hover or tap anything highlighted in the text. Locations light up here; moves show the series you would replay by clicking them.</p>
