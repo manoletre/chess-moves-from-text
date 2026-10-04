@@ -240,7 +240,7 @@ textarea:focus-visible, .button:focus-visible, .example:focus-visible, .span:foc
   border-radius: var(--radius);
   box-shadow: 0 30px 50px -30px rgba(28, 25, 21, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
-.board { display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; position: relative; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; position: relative; container-type: inline-size; }
 .sq { position: relative; display: grid; place-items: center; font: 600 13px/1 var(--mono); }
 .sq--light { background: var(--light-sq); }
 .sq--dark { background: var(--dark-sq); }
@@ -260,7 +260,7 @@ textarea:focus-visible, .button:focus-visible, .example:focus-visible, .span:foc
 .sq__rank { left: -17px; top: 50%; transform: translateY(-50%); }
 .sq__step {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 62%;
   aspect-ratio: 1;
   display: grid;
@@ -271,6 +271,38 @@ textarea:focus-visible, .button:focus-visible, .example:focus-visible, .span:foc
   animation: stamp 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
 }
 .sq__step--start { background: var(--ink); }
+.piece {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  font: 400 10.5cqw/1 "Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols 2", serif;
+  cursor: default;
+  user-select: none;
+}
+.piece--w { color: #fffaf0; text-shadow: 0 0 1px var(--ink), 0 0 1px var(--ink), 0 1px 1px var(--ink), 0 2px 3px rgba(28, 25, 21, 0.35); }
+.piece--b { color: var(--ink); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25), 0 2px 3px rgba(28, 25, 21, 0.3); }
+.sq:has(.piece) .sq__step { width: 40%; font-size: 10px; place-self: start end; margin: 2px; }
+
+.fen { display: grid; gap: 8px; }
+.fen__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fen label { font: 600 11px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+.fen__presets { display: flex; gap: 6px; }
+.fen__presets .example { padding: 5px 9px; font-size: 11px; }
+.fen input {
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: 400 12px/1.4 var(--mono);
+  padding: 9px 10px;
+}
+.fen input:focus-visible { outline: 2px solid var(--FILE); outline-offset: 2px; }
+.fen input[aria-invalid="true"] { border-color: var(--START); }
+.fen__error { margin: 0; font: 400 12px/1.4 var(--mono); color: var(--START); }
+.fen__error:empty { display: none; }
 
 .readout {
   background: var(--card);
