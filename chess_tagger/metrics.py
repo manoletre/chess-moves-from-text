@@ -29,7 +29,7 @@ def score(examples: list[dict], predicted: list[dict]) -> dict:
         pc = [[tuple(c[:3]) for c in predicted[i]["claims"]] for i in full]
         out["claim"] = f1(gc, pc)
         out["claim_detection"] = f1([[c[:2] for c in g] for g in gc], [[c[:2] for c in p] for p in pc])
-        for kind in ("CHECK", "MATE", "WINS", "ATTACKS", "FLIGHT"):
+        for kind in ("CHECK", "MATE", "WINS", "ATTACKS", "FLIGHT", "EVAL"):
             only = lambda rows: [[c for c in r if c[2] == kind] for r in rows]
             out[f"claim_{kind}"] = f1(only(gc), only(pc))
 

@@ -52,7 +52,11 @@ body {
 
 /* ---------- examples ---------- */
 
-.examples { display: flex; flex-wrap: wrap; gap: 8px; }
+.examples { display: grid; gap: 10px; }
+.examples__group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.examples__title { flex-basis: 100%; font: 400 11px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+.inputs { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 10px; }
+@media (max-width: 560px) { .inputs { grid-template-columns: 1fr; } }
 .example {
   font: 400 12px/1 var(--mono);
   padding: 7px 10px;
@@ -117,6 +121,9 @@ body {
   text-underline-offset: 5px;
 }
 .mk--ref { cursor: default; }
+.show-check .mk--untagged { outline: 1.5px dashed var(--v-false); outline-offset: 1px; cursor: help; }
+.audit { margin-top: 14px; padding: 10px 12px; border: 1px dashed var(--v-false); border-radius: var(--radius); }
+.audit h3 { margin-top: 0; }
 .mk--loc { color: var(--c); font-weight: 600; }
 
 /* ---------- the chess.js layer: verdict colours and badges ---------- */

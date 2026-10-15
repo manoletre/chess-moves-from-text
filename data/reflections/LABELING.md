@@ -111,7 +111,21 @@ How to decide: ask "in which position is this sentence true or false?"
 - A piece on a line is a piece + the line: `{White's bishop}[piece after] sits on the {a4-e8}[diagonal] diagonal`; the checker reads it as a placement.
 - "The g2 pawn" is `{g2}[square] {pawn}[piece ...]`; the checker reads square + piece as a placement.
 
-## 7. Edge cases
+## 7. v3.2: game-ending wording and evaluations (EVAL)
+
+A reflection can claim mate or a win without the usual words. The reward checker must see these, or a policy learns to hide false claims in them.
+
+**`mate`** also covers any wording that says the game ends now: `<finishes it>`, `<it's over>`, `<game over>`, `<the king is dead>`, `<and the king falls>`, `<Black resigns>`, `<forces resignation>`, `<is 1-0>`, `<is #>`, `<no reply exists>`, `<can't parry it>`, `<there is nothing to be done>`, `<seals the king's fate>`, `<is curtains>`, `<lights out>`. Vague words about the mating *process* stay unlabelled ("the mating net", "a mating attack").
+
+**`eval`** (new) is a claim that a move is winning / the best / decisive, or that a side is won or lost:
+- about a move: `<decisive>`, `<is decisive>`, `<winning move>`, `<the winning idea>` → `<winning idea>`, `<strongest move>`, `<the only move>` → `<only move>`, `<best move>`, `<unstoppable>`, `<crushing>`, `<lethal>`, `<devastating>`, `<killer blow>`, `<wins by force>`, `<forced win>`, `<the correct move>` → `<correct move>`;
+- about a side: `Black <is lost>`, `White <is winning>`, `<is busted>`, `<is hopeless>`;
+- negated: `<is not the best>`, `<isn't decisive>`, `<falls short>`, `<is a mistake>`, `<loses>` (a negative evaluation of a move: the checker reads the negation).
+
+Span = the evaluative words without a leading "the". The checker verifies `eval` against the puzzle's solution move: a positive evaluation is true if the move it is about (the nearest move in its sentence, else the chosen move) is the solution; a negative one if it isn't.
+Already-labelled `mate` claims like `<the fastest and most direct mate>` stay `mate`.
+
+## 8. Edge cases
 - Text cut off mid-sentence: label up to where it stops; never complete it.
 - Garbled text ("the f6- pawn", "fxc2 wins a knight"): still label any square / move / piece you can see; `fxc2` is a move even if nonsense.
 - Characters `{ } < > [ ]` never appear in a label's text; if the original contains them, leave those characters unlabelled.

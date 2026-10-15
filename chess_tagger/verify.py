@@ -31,14 +31,20 @@ PIECES = {"pawn": chess.PAWN, "knight": chess.KNIGHT, "bishop": chess.BISHOP,
           "rook": chess.ROOK, "queen": chess.QUEEN, "king": chess.KING}
 PIECE_WORD = re.compile(r"\b(pawn|knight|bishop|rook|queen|king)s?\b", re.I)
 SQUARE = re.compile(r"\b([a-h][1-8])\b")
-NEGATION = re.compile(r"\b(not|no|cannot|can't|can not|never|without|nowhere|nothing|none|un\w+|longer)\b", re.I)
-RESTRICTIVE = re.compile(r"box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal", re.I)
+# "isn't", "doesn't", "can't" ... are negations; "un-" words are, except the ones that intensify a claim
+NEGATION = re.compile(r"\b(not|no|cannot|can not|never|without|nowhere|nothing|none|longer|\w+n't|"
+                      r"un(?!stoppable|avoidable|answerable|parr|stopp|deniabl|questionabl)\w+)\b", re.I)
+RESTRICTIVE = re.compile(r"box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal|helpless|caught|netted|no moves|no squares", re.I)
 CAPTURE_VERB = re.compile(r"\b(captur\w*|takes?|taking|recaptur\w*|grab\w*|win\w*|snap\w*)\b", re.I)
 PROMOTION = re.compile(r"promot\w*\s+(?:to\s+)?(?:an?\s+)?(queen|rook|bishop|knight)|=([QRBN])", re.I)
 CASTLE = re.compile(r"castl\w*\s*(short|long|kingside|queenside|king-side|queen-side)?|\b([0O]-[0O](?:-[0O])?)\b", re.I)
 UCI = re.compile(r"^([a-h][1-8])([a-h][1-8])([qrbn])?$")
 TWO_SQUARES = re.compile(r"([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])")
 FALLBACK = " (checked before the unplayable move)"
+NEGATIVE_EVAL = re.compile(r"mistake|blunder|error|loses|losing|fails|falls short|\bbad\b|weak|wrong|refuted|dubious|"
+                           r"too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\bdud\b|"
+                           r"pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura", re.I)
+NEGATED_END = re.compile(r"(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)", re.I)
 REACH = re.compile(r"reach|go to|move to|get to|land on|jump to", re.I)
 ANAPHORA = re.compile(r"\s*(that square|this square|those squares|these squares|it\b|them\b|both)", re.I)
 SENTENCE_END = re.compile(r"[.;!?\n]")
@@ -268,7 +274,8 @@ def _king_moves(board: chess.Board, color) -> set:
     return {mv.to_square for mv in b.legal_moves if mv.from_square == king}
 
 
-def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict:
+def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: str | None = None) -> dict:
+    """best: the puzzle's solution move (UCI), if known. Without it, EVAL claims are unverifiable."""
     root = chess.Board(fen)
     defender = not root.turn  # the side the puzzle is played against
     mentions = sorted(tagged["mentions"], key=lambda m: m[0])
@@ -316,6 +323,11 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 fact("capture", m, before.is_capture(move), "x in notation")
         else:
             fact("legal_move", m, False if status == "illegal" else None, status)
+
+    # the reflection's conclusion: the last chosen move that can be played from the puzzle position
+    # (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
+    chosen_all = [mv for mv in moves if mv[5] == "CHOSEN" and mv[2] is root]
+    chosen = next((mv for mv in reversed(chosen_all) if mv[3] is not None), chosen_all[-1] if chosen_all else None)
 
     def frame_board(span, frame):
         """(board, last move, fallback). After a move that can't be played (hallucinated, or a reply to
@@ -399,6 +411,8 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
 
         if kind in ("CHECK", "MATE"):
             value = board.is_check() if kind == "CHECK" else board.is_checkmate()
+            # "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
+            negated = bool(NEGATED_END.search(claim_text))
             fact(kind.lower(), c, value != negated)
         elif kind == "WINS":
             mv = next((x for x in moves if subject and x[0] == subject[0]), last_move)
@@ -475,6 +489,33 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 hit = [h and board.color_at(t) != own for h, t in zip(hit, targets)]
             fact("attacks", c, (all(hit) if not negated else not any(hit)),
                  ", ".join(f"{chess.square_name(t)}:{'yes' if h else 'no'}" for t, h in zip(targets, hit)))
+        elif kind == "EVAL":
+            state["fallback"] = False  # an evaluation is about a move, not a position
+            if best is None:
+                fact("eval", c, None, "no solution move given")
+                continue
+            positive = not NEGATIVE_EVAL.search(claim_text)
+            side = re.search(r"\b(white|black)\b[\w\s']{0,12}$", text[max(0, start - 20):start], re.I)
+            if side:  # "Black is lost", "White is winning": about a side, not a move
+                named_attacker = (side.group(1).lower() == "white") == (root.turn == chess.WHITE)
+                if re.search(r"lost|bust|hopeless|done|can'?t hold|cannot hold|resign", claim_text, re.I):
+                    positive = not named_attacker
+                    negated = bool(re.search(r"\bnot\b|n't (?:lost|bust|hopeless|done)", claim_text, re.I))
+                elif re.search(r"win", claim_text, re.I):
+                    positive = named_attacker
+            if negated:
+                positive = not positive
+            s_lo = max([m.end() for m in SENTENCE_END.finditer(text) if m.end() <= start] or [0])
+            s_hi = min([m.start() for m in SENTENCE_END.finditer(text) if m.start() >= end] or [len(text)])
+            near = [mv for mv in moves if s_lo <= mv[0] < s_hi]
+            before_claim = [mv for mv in near if mv[0] < start]
+            target = before_claim[-1] if before_claim else (near[0] if near else chosen)
+            if target is None or target[3] is None:
+                fact("eval", c, None, "no playable move to evaluate")
+                continue
+            is_best = target[3].uci() == best
+            fact("eval", c, is_best == positive,
+                 f"{target[3].uci()} {'is' if is_best else 'is not'} the solution ({best})")
         elif kind == "FLIGHT":
             color = None
             if subject is not None and subject[2] == "PIECE":
@@ -498,10 +539,6 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
             fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none"))
 
     state["fallback"] = False
-    # the reflection's conclusion: the last chosen move that can be played from the puzzle position
-    # (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
-    chosen_all = [mv for mv in moves if mv[5] == "CHOSEN" and mv[2] is root]
-    chosen = next((mv for mv in reversed(chosen_all) if mv[3] is not None), chosen_all[-1] if chosen_all else None)
     chosen_uci = chosen[3].uci() if chosen and chosen[3] else None
     summary = {}
     for f in facts:

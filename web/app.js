@@ -2,9 +2,10 @@ import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/o
 import { Chess } from "./vendor/chess.js";
 import { loadTagger } from "./tagger.js";
 import { positionBefore, verify } from "./verify.js";
+import { audit } from "./audit.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
-const MODEL_CACHE = "chess-move-tagger-v3.1";
+const MODEL_CACHE = "chess-move-tagger-v3.2";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 
 const FILES = "abcdefgh";
@@ -92,7 +93,7 @@ function squaresFor(span) {
 
 const KIND_LABEL = {
   legal_move: "move", check: "check", mate: "mate", capture: "capture", wins: "wins material",
-  attacks: "attacks / covers", flight: "king's squares", placement: "piece on square",
+  attacks: "attacks / covers", flight: "king's squares", placement: "piece on square", eval: "evaluation",
 };
 const BADGE = { true: "✓", false: "✗", unknown: "?" };
 const verdictKey = (v) => (v === true ? "true" : v === false ? "false" : "unknown");
@@ -100,6 +101,8 @@ const verdictKey = (v) => (v === true ? "true" : v === false ? "false" : "unknow
 const worst = (facts) => verdictKey(facts.some((f) => f.verdict === false) ? false : facts.some((f) => f.verdict === null) ? null : true);
 
 let report = null;   // verify() of the text shown: what chess.js says about what the tagger found
+let audited = null;  // audit(): confident wording the tagger did not tag
+let best = null;     // the puzzle's solution move (UCI), when known: evaluations are checked against it
 let marks = [];      // what is drawn in the text
 let showCheck = true;
 
@@ -152,7 +155,8 @@ function placeCaret(offset) {
 // What gets marked: the tagger's moves and the facts the checker reads (claims and "piece on
 // square"), nothing else. Pieces and squares a fact talks about are linked on hover, not painted.
 function buildMarks(text, data) {
-  report = verify(fen, text, data.raw);
+  report = verify(fen, text, data.raw, best);
+  audited = audit(text, data.raw);
   const out = [];
   const factsAt = new Map();
   for (const f of report.facts) {
@@ -177,6 +181,11 @@ function buildMarks(text, data) {
     out.push({ start: m[0], end: m[1], kind: related.has(m[0]) || !loc ? "ref" : "loc", type: m[2],
       text: text.slice(m[0], m[1]), cls: related.has(m[0]) || !loc ? "mk mk--ref" : `mk mk--loc span--${m[2]}`,
       title: m[2].toLowerCase() });
+  }
+  for (const h of audited.untagged) {
+    if (h.family === "check") continue; // too noisy to flag
+    out.push({ start: h.start, end: h.end, kind: "untagged", cls: "mk mk--untagged",
+      title: `audit: "${h.text}" sounds like a ${h.family === "mate" ? "mate" : "evaluation"} claim, but the tagger didn't tag it` });
   }
   out.sort((a, b) => a.start - b.start || b.end - a.end);
   return out.filter((m, i) => !out.slice(0, i).some((o) => o.end > m.start && o.start < m.end)); // no overlaps
@@ -232,6 +241,15 @@ function frameLabel(f) {
   return `after ${f.lastMove.san}`;
 }
 
+function untaggedHtml() {
+  const hits = audited.untagged.filter((h) => h.family !== "check");
+  if (!hits.length) return "";
+  return `<div class="col-check audit"><h3>Reward-hacking audit</h3>
+    <p>Confident wording the tagger didn't turn into a claim, so the checker can't verify it:
+    ${hits.map((h) => `<b>“${escapeHtml(h.text)}”</b> <span class="muted">(${h.family})</span>`).join(", ")}.
+    The RL loop flags reflections like this.</p></div>`;
+}
+
 function renderReport(text) {
   if (!report || (!report.moves.length && !report.facts.length)) { reportEl.hidden = true; return; }
   reportEl.hidden = false;
@@ -270,8 +288,9 @@ function renderReport(text) {
       </div>
     </div>
     <p class="col-check counts">chess.js: <b class="v v--true">✓ ${counts.true}</b> true · <b class="v v--false">✗ ${counts.false}</b> false · <b class="v v--unknown">? ${counts.unknown}</b> can't tell</p>
-    <h3>Chosen move</h3><p>${decision}</p>
+    <h3>Chosen move</h3><p>${decision}${best ? ` <span class="col-check muted">· puzzle solution: ${best}</span>` : ""}</p>
     <h3>Lines</h3><ul class="lines">${lines || '<li class="muted">none</li>'}</ul>
+    ${untaggedHtml()}
     <h3>Facts</h3>
     ${rows ? `<table class="facts"><thead><tr><th>tagger: claim</th><th>position</th><th class="col-check">chess.js</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">no claims</p>'}`;
 }
@@ -374,6 +393,8 @@ editor.addEventListener("input", (e) => {
   if (!readEditor().text.trim()) {
     fen = START_FEN; // an empty box starts over from the initial position
     fenInput.value = "";
+    best = null;
+    bestInput.value = "";
     exampleBar.querySelectorAll(".example").forEach((c) => c.classList.remove("is-active"));
     drawPosition(new Chess(fen));
   }
@@ -400,10 +421,19 @@ function setFen(value) {
   return true;
 }
 fenInput.addEventListener("input", () => setFen(fenInput.value));
+const bestInput = $("#best");
+bestInput.addEventListener("input", () => {
+  const v = bestInput.value.trim().toLowerCase();
+  best = /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(v) ? v : null;
+  bestInput.toggleAttribute("aria-invalid", !!v && !best);
+  if (result) render(readEditor().text, result);
+});
 
 function showExample(example, chip) {
   exampleBar.querySelectorAll(".example").forEach((c) => c.classList.toggle("is-active", c === chip));
   fen = example.fen;
+  best = example.best ?? null;
+  bestInput.value = best ?? "";
   fenInput.value = example.fen;
   fenInput.removeAttribute("aria-invalid");
   result = null;
@@ -413,15 +443,25 @@ function showExample(example, chip) {
   annotate();
 }
 
-for (const example of examples) {
-  const chip = document.createElement("button");
-  chip.type = "button";
-  chip.className = "example";
-  chip.textContent = example.label;
-  chip.addEventListener("click", () => showExample(example, chip));
-  exampleBar.append(chip);
+const GROUPS = {
+  reflection: "Reflections by the puzzle model (checked against the solution)",
+  commentary: "Chess commentary",
+};
+for (const [group, title] of Object.entries(GROUPS)) {
+  const row = document.createElement("div");
+  row.className = "examples__group";
+  row.innerHTML = `<span class="examples__title">${title}</span>`;
+  for (const example of examples.filter((e) => (e.group ?? "commentary") === group)) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "example";
+    chip.textContent = example.label;
+    chip.addEventListener("click", () => showExample(example, chip));
+    row.append(chip);
+  }
+  exampleBar.append(row);
 }
-showExample(examples[0], exampleBar.firstElementChild);
+showExample(examples[0], exampleBar.querySelector(".example"));
 
 try {
   tag = await loadTagger(ort, MODEL_URL, MODEL_CACHE, (fraction) => loader.style.setProperty("--progress", fraction));

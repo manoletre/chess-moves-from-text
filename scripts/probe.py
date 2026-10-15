@@ -67,7 +67,11 @@ CHOOSE = [
 CHECK = ["<gives check>", "<with check>", "<checks> the {K}", "<is check>", "<puts> the {K} <in check>",
          "<delivers a check>", "<comes with check>", "<checks>", "<giving check>", "<is a check>",
          "<gives a check>", "<forces the king to move>", "<is with check>", "<checks> the enemy {K}"]
-MATE = ["<delivers checkmate>", "<is mate>", "<mates>", "<is checkmate>", "<ends the game>", "<is mate in one>",
+MATE = ["<finishes it>", "<it's over>", "<game over>", "<the king is dead>", "<and the king falls>", "<Black resigns>",
+        "<forces resignation>", "<is 1-0>", "<is #>", "<no reply exists>", "<can't parry it>", "<there is nothing to be done>",
+        "<seals the king's fate>", "<is curtains>", "<lights out>", "<and that's the game>", "<wins on the spot>",
+        "<leaves no defence>", "<the game is over>", "<the end>",
+        "<delivers checkmate>", "<is mate>", "<mates>", "<is checkmate>", "<ends the game>", "<is mate in one>",
         "<finishes the game>", "<forces mate>", "<leaves> the {K} <no legal move>", "<is a checkmate>", "<mates immediately>",
         "<seals the mate>", "<wins by checkmate>", "<is game over>", "<checkmates>", "<is a mating blow>",
         "<delivers mate>", "<gives mate>"]
@@ -78,6 +82,13 @@ ATTACKS = ["<attacks> {S}", "<covers> {S}", "<controls> {S}", "<eyes> {S}", "<hi
            "<keeps an eye on> {S}", "<takes away> {S}", "<sees> {S}", "<supports> {S}"]
 NO_ATTACK = ["<does not cover> {S}", "<cannot reach> {S}", "<does not attack> {S}", "<no longer controls> {S}",
              "<fails to guard> {S}"]
+EVAL_GOOD = ["<is decisive>", "<is the winning move>", "<is the strongest move>", "<is the only move>", "<is crushing>",
+             "<is unstoppable>", "<is lethal>", "<is devastating>", "<is the killer blow>", "<wins by force>",
+             "<is the best move>", "<is the right idea>", "<is the correct move>", "<is winning>", "<is overwhelming>",
+             "<is the cleanest win>", "<settles it>", "<is a forced win>", "<is completely winning>", "<is the key idea>"]
+EVAL_BAD = ["<is a mistake>", "<is a blunder>", "<falls short>", "<is refuted>", "<is too slow>", "<is not the best>",
+            "<loses>", "<is dubious>", "<is an error>", "<doesn't win>", "<is not decisive>", "<throws away the win>",
+            "<is a dud>", "<goes nowhere>"]
 FLIGHT_NONE = ["<has no escape>", "<is trapped>", "<has nowhere to go>", "<cannot move>", "<has no flight squares>",
                "<is boxed in>", "<is stuck>", "<has no legal moves left>", "<is out of squares>", "<cannot run>"]
 FLIGHT_SQ = ["<cannot go to> {S}", "<cannot escape to> {S}", "<is denied> {S}", "<cannot step to> {S}",
@@ -137,6 +148,16 @@ def render_claim(template, kind, frame, slots):
     return out
 
 
+def mate_sentence(claim_markup, them):
+    """'It <mates>.', 'Then <it's over>.', 'Black <can't parry it>.' depending on how the phrase starts."""
+    head = claim_markup.lstrip("<").split()[0].lower()
+    if head in {"can't", "cannot"}:
+        return f"{them} {claim_markup}."
+    if head in {"it's", "game", "the", "and", "black", "no", "there", "lights"}:
+        return f"Then {claim_markup}."
+    return f"It {claim_markup}."
+
+
 def example(fen, rng, split):
     board = chess.Board(fen)
     legal = list(board.legal_moves)
@@ -189,10 +210,11 @@ def example(fen, rng, split):
     after.push(chosen)
     piece = NAMES[after.piece_type_at(chosen.to_square)]
     extra = []
-    if after.is_checkmate():
+    # claims are labelled whether true or not: also write fake mates / checks (the RL risk)
+    if after.is_checkmate() or rng.random() < 0.35:
         t = pick(rng, MATE, split); families.append("mate:" + t)
-        extra.append(f"It {render_claim(t, 'mate', 'after', {})}.")
-    elif after.is_check():
+        extra.append(mate_sentence(render_claim(t, 'mate', 'after', {}), them))
+    elif after.is_check() or rng.random() < 0.2:
         t = pick(rng, CHECK, split); families.append("check:" + t)
         extra.append(f"It {render_claim(t, 'check', 'after', {})}.")
     if board.is_capture(chosen) and board.piece_type_at(chosen.to_square):
@@ -220,6 +242,17 @@ def example(fen, rng, split):
             t = pick(rng, FLIGHT_CAN, split); families.append("flight:" + t)
             sq = rng.choice(list(chess.SquareSet(chess.BB_KING_ATTACKS[king_sq])))
             extra.append(f"The {{king}}[piece after] {render_claim(t, 'flight', 'after', {'S': chess.square_name(sq)})}.")
+    if rng.random() < 0.6:
+        t = pick(rng, EVAL_GOOD, split); families.append("eval_good:" + t)
+        extra.append(f"It {render_claim(t, 'eval', 'after', {})}.")
+    if rng.random() < 0.5:
+        t = pick(rng, EVAL_BAD, split); families.append("eval_bad:" + t)
+        parts[1] = parts[1].rstrip(".") + f", and it {render_claim(t, 'eval', 'after', {})}."
+    if rng.random() < 0.3:
+        side_lost = them
+        t = pick(rng, ["<is lost>", "<is busted>", "<is hopeless>", "<is done for>", "<cannot hold>"], split)
+        families.append("eval_side:" + t)
+        extra.append(f"{side_lost} {render_claim(t, 'eval', 'after', {})}.")
     rng.shuffle(extra)
     marked = " ".join(parts[:2] + extra[:3] + parts[2:]) if rng.random() < 0.5 else " ".join(parts + extra[:3])
     # if the chosen sentence comes last, claims about it come before it: then they are about the position NOW

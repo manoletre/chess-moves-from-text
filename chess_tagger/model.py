@@ -7,7 +7,7 @@ into four heads, each with its own softmax:
     line     NEW | NEXT | ALT                  (read on the tokens of a MOVE span)
     stance   CHOSEN | REJECTED | CONSIDERED    (read on the tokens of a MOVE span)
     frame    NOW | AFTER                       (read on the tokens of a PIECE span or a claim)
-    claim    BIO over CHECK, MATE, WINS, ATTACKS, FLIGHT          (11 labels)
+    claim    BIO over CHECK, MATE, WINS, ATTACKS, FLIGHT, EVAL    (13 labels)
 
 scripts/train.py trains it; keep the decoding rules here and in web/tagger.js in sync.
 

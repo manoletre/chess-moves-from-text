@@ -4,8 +4,9 @@ import { Chess } from "./vendor/chess.js";
 
 const PIECES = { pawn: "p", knight: "n", bishop: "b", rook: "r", queen: "q", king: "k" };
 const PIECE_WORD = /\b(pawn|knight|bishop|rook|queen|king)s?\b/i;
-const NEGATION = /\b(not|no|cannot|can't|can not|never|without|nowhere|nothing|none|un\w+|longer)\b/i;
-const RESTRICTIVE = /box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal/i;
+// "isn't", "doesn't", "can't" ... are negations; "un-" words are, except the ones that intensify a claim
+const NEGATION = /\b(not|no|cannot|can not|never|without|nowhere|nothing|none|longer|\w+n't|un(?!stoppable|avoidable|answerable|parr|stopp|deniabl|questionabl)\w+)\b/i;
+const RESTRICTIVE = /box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal|helpless|caught|netted|no moves|no squares/i;
 const CAPTURE_VERB = /\b(captur\w*|takes?|taking|recaptur\w*|grab\w*|win\w*|snap\w*)\b/i;
 const RECAPTURE = /\b(recaptur\w*|takes? (it|back)|captur\w* (it|back)|retak\w*)\b/i;
 const PROMOTION = /promot\w*\s+(?:to\s+)?(?:an?\s+)?(queen|rook|bishop|knight)|=([QRBN])/i;
@@ -14,7 +15,9 @@ const UCI = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/;
 const TWO_SQUARES = /([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])/;
 const MATE_WORD = /mate\b/i;
 const CHECK_WORD = /\bcheck/i;
+const NEGATED_END = /(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)/i;
 const REACH = /reach|go to|move to|get to|land on|jump to/i;
+const NEGATIVE_EVAL = /mistake|blunder|error|loses|losing|fails|falls short|\bbad\b|weak|wrong|refuted|dubious|too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\bdud\b|pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura/i;
 const ANAPHORA = /^\s*(that square|this square|those squares|these squares|it\b|them\b|both)/i;
 const CLAUSE_END = /[.;:!?\n]|,\s*(?:but|while|and then|so|because|as|whereas)\b|\bbut\b|\bbecause\b/g;
 const SENTENCE_END = /[.;!?\n]/g;
@@ -211,7 +214,8 @@ function movedFrom(last, square, game, kind = null) {
 
 // fen + text + raw tagger output ({ mentions: [[s, e, type, line, stance, frame]], claims: [[s, e, type, frame]] })
 // -> { facts, moves, lines, chosen }
-export function verify(fen, text, raw) {
+// best: the puzzle's solution move (UCI), if known. Without it, EVAL claims are unverifiable.
+export function verify(fen, text, raw, best = null) {
   const mentions = [...raw.mentions].sort((a, b) => a[0] - b[0]);
   const claims = [...raw.claims].sort((a, b) => a[0] - b[0]);
   const defender = new Chess(fen).turn() === "w" ? "b" : "w"; // the side the puzzle is played against
@@ -252,6 +256,11 @@ export function verify(fen, text, raw) {
       fact("legal_move", m[0], m[1], status === "illegal" ? false : null, status, { frameFen: before, related: [m[0]] });
     }
   }
+
+  // the reflection's conclusion: the last chosen move that can be played from the puzzle position
+  // (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
+  const chosenAll = moves.filter((mv) => mv.stance === "CHOSEN" && mv.before === fen);
+  const chosen = [...chosenAll].reverse().find((mv) => mv.move) ?? chosenAll.at(-1) ?? null;
 
   // The position a fact is checked in. After an unplayable move: the last real position before it.
   const frameOf = (start, frame) => {
@@ -330,7 +339,9 @@ export function verify(fen, text, raw) {
 
     if (kind === "CHECK" || kind === "MATE") {
       const value = kind === "CHECK" ? board.isCheck() : board.isCheckmate();
-      fact(k, start, end, value !== negated, value ? `${kind === "CHECK" ? "check" : "checkmate"} on the board` : `no ${kind === "CHECK" ? "check" : "mate"} on the board`, extra);
+      // "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
+      const negatedEnd = NEGATED_END.test(claimText);
+      fact(k, start, end, value !== negatedEnd, value ? `${kind === "CHECK" ? "check" : "checkmate"} on the board` : `no ${kind === "CHECK" ? "check" : "mate"} on the board`, extra);
     } else if (kind === "WINS") {
       const mv = (subject && moves.find((x) => x.start === subject[0])) || last;
       if (!mv?.move) { fact(k, start, end, null, "no resolved move", extra); continue; }
@@ -394,6 +405,31 @@ export function verify(fen, text, raw) {
       extra.targets = [src, ...targets];
       fact(k, start, end, negated ? !hit.some(Boolean) : hit.every(Boolean),
         targets.map((t, i) => `${src}→${t} ${hit[i] ? "yes" : "no"}`).join(", "), extra);
+    } else if (kind === "EVAL") {
+      fallbackNow = false; // an evaluation is about a move, not a position
+      if (!best) { fact(k, start, end, null, "no solution move given", extra); continue; }
+      let positive = !NEGATIVE_EVAL.test(claimText);
+      let sideNegated = null;
+      const side = text.slice(Math.max(0, start - 20), start).match(/\b(white|black)\b[\w\s']{0,12}$/i);
+      if (side) { // "Black is lost", "White is winning": about a side, not a move
+        const namedAttacker = (side[1].toLowerCase() === "white") === (new Chess(fen).turn() === "w");
+        if (/lost|bust|hopeless|done|can'?t hold|cannot hold|resign/i.test(claimText)) {
+          positive = !namedAttacker;
+          sideNegated = /\bnot\b|n't (?:lost|bust|hopeless|done)/i.test(claimText);
+        } else if (/win/i.test(claimText)) positive = namedAttacker;
+      }
+      if (sideNegated ?? negated) positive = !positive;
+      const sentenceEnds = [...text.matchAll(SENTENCE_END)].map((m) => m.index);
+      const sLo = Math.max(0, ...sentenceEnds.filter((i) => i + 1 <= start).map((i) => i + 1));
+      const sHi = Math.min(text.length, ...sentenceEnds.filter((i) => i >= end));
+      const near = moves.filter((mv) => mv.start >= sLo && mv.start < sHi);
+      const beforeClaim = near.filter((mv) => mv.start < start);
+      const target = beforeClaim.at(-1) ?? near[0] ?? chosen;
+      if (!target?.move) { fact(k, start, end, null, "no playable move to evaluate", extra); continue; }
+      const uci = target.move.from + target.move.to + (target.move.promotion ?? "");
+      const isBest = uci === best;
+      fact(k, start, end, isBest === positive, `${uci} ${isBest ? "is" : "is not"} the solution (${best})`,
+        { ...extra, frameFen: target.before, lastMove: null, targets: [target.move.from, target.move.to], related: [start, target.start] });
     } else if (kind === "FLIGHT") {
       let color = null;
       if (subject?.[2] === "PIECE") {
@@ -421,10 +457,6 @@ export function verify(fen, text, raw) {
     if (mv.line === "NEW" || !lines.length) lines.push({ stance: mv.stance, moves: [] });
     lines.at(-1).moves.push(mv);
   }
-  // the reflection's conclusion: the last chosen move played from the puzzle position
-  // (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
-  const chosenAll = moves.filter((mv) => mv.stance === "CHOSEN" && mv.before === fen);
-  const chosen = [...chosenAll].reverse().find((mv) => mv.move) ?? chosenAll.at(-1) ?? null;
   return { facts: facts.sort((a, b) => a.start - b.start), moves, lines, chosen };
 }
 

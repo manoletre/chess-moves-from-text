@@ -9,7 +9,7 @@ Mentions are wrapped in braces, with their type and attributes in square bracket
 Claims are wrapped in angle brackets, with their type and frame:
 
     <gives check>[check after]  <checkmate>[mate after]  <wins>[wins after]
-    <covers>[attacks now]  <cannot go to>[flight after]
+    <covers>[attacks now]  <cannot go to>[flight after]  <is decisive>[eval after]
 
 line:  new  = played from the current (puzzle) position
        next = played after the move mentioned just before it (continues that line)
@@ -30,7 +30,7 @@ The frame may be missing (None) in older labels; check(..., frames=True) require
 import re
 
 MENTION_TYPES = ["MOVE", "PIECE", "SQUARE", "FILE", "RANK", "DIAGONAL"]
-CLAIM_TYPES = ["CHECK", "MATE", "WINS", "ATTACKS", "FLIGHT"]
+CLAIM_TYPES = ["CHECK", "MATE", "WINS", "ATTACKS", "FLIGHT", "EVAL"]
 LINES = ["NEW", "NEXT", "ALT"]
 STANCES = ["CHOSEN", "REJECTED", "CONSIDERED"]
 FRAMES = ["NOW", "AFTER"]
