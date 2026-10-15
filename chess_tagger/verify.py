@@ -169,6 +169,7 @@ def _king_moves(board: chess.Board, color) -> set:
 
 def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict:
     root = chess.Board(fen)
+    defender = not root.turn  # the side the puzzle is played against
     mentions = sorted(tagged["mentions"], key=lambda m: m[0])
     claims = sorted(tagged.get("claims") or [], key=lambda c: c[0])
     facts, moves = [], []  # moves: (start, end, before, move, after, stance)
@@ -243,8 +244,21 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
         claim_text = text[start:end]
         negated = bool(NEGATION.search(claim_text))
         lo, hi = _clause_bounds(text, start)
+        # objects stop where the next claim's subject starts ("covers g1 and h2, and the queen covers g3")
+        passive = bool(re.match(r"\s*by\b", text[end:]))
+        later = next((x for x in claims if x[0] >= end and x[0] < hi), None)
+        if later is not None and not passive:
+            next_subject = next((m for m in reversed(mentions) if end <= m[0] < later[0] and m[2] in ("MOVE", "PIECE")), None)
+            if next_subject is not None:
+                hi = next_subject[0]
         subject = next((m for m in reversed(mentions) if lo <= m[0] < start and m[2] in ("MOVE", "PIECE")), None)
         objects = [m for m in mentions if end <= m[0] < hi and m[2] in ("SQUARE", "PIECE")]
+        if passive:  # "g1 is covered by the rook on g2": the agent is the subject, the thing before it the object
+            agent = next((m for m in mentions if end <= m[0] < (later[0] if later else hi) and m[2] == "PIECE"), None)
+            if agent is not None:
+                covered = next((m for m in reversed(mentions) if lo <= m[0] < start and m[2] in ("SQUARE", "PIECE")), None)
+                objects = [covered] if covered is not None else []
+                subject = agent
 
         if kind in ("CHECK", "MATE"):
             value = board.is_check() if kind == "CHECK" else board.is_checkmate()
@@ -281,7 +295,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 ok = not board.attackers(board.color_at(src), src)  # "is undefended"
                 fact("attacks", c, ok, "no defenders" if ok else "defended")
                 continue
-            if re.search(r"pin", claim_text, re.I) and not objects:
+            if re.search(r"pin", claim_text, re.I):  # "pinned (to the king by the knight)": objects only say by what
                 fact("attacks", c, board.is_pinned(board.color_at(src), src) != negated, "pinned")
                 continue
             targets = []
@@ -295,6 +309,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                                      _piece_square(text, o, mentions)) if w else None
                     if sq is not None:
                         targets.append(sq)
+            targets = list(dict.fromkeys(targets))
             if not targets:
                 fact("attacks", c, None, "no target")
                 continue
@@ -310,7 +325,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 if color is None and sq is not None and board.piece_type_at(sq) == chess.KING:
                     color = board.color_at(sq)
             if color is None:
-                color = board.turn  # in the frame position, the side to move is the one being mated
+                color = defender  # a king with no colour is the one being attacked
             if board.king(color) is None:
                 fact("flight", c, None, "no king")
                 continue

@@ -80,6 +80,10 @@ def bio_spans(text: str, offsets: list, labels: list[str]) -> list:
         inside = True
     cleaned = []
     for start, end, kind, t0, t1 in spans:
+        while start > 0 and start < end and text[start - 1].isalnum() and text[start].isalnum():
+            start -= 1  # a span never starts or ends in the middle of a word ("ra|kes")
+        while end < len(text) and end > start and text[end].isalnum() and text[end - 1].isalnum():
+            end += 1
         while start < end and text[start] in TRIM:
             start += 1
         while end > start and text[end - 1] in TRIM:

@@ -118,7 +118,11 @@ function bioSpans(text, offsets, labels) {
     inside = true;
   });
   const cleaned = [];
+  const alnum = (c) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
   for (let [start, end, kind, t0, t1] of spans) {
+    // a span never starts or ends in the middle of a word ("ra|kes")
+    while (start > 0 && start < end && alnum(text[start - 1]) && alnum(text[start])) start--;
+    while (end < text.length && end > start && alnum(text[end]) && alnum(text[end - 1])) end++;
     while (start < end && TRIM.has(text[start])) start++;
     while (end > start && TRIM.has(text[end - 1])) end--;
     if (start < end) cleaned.push([start, end, kind, t0, t1]);
@@ -229,9 +233,10 @@ export async function loadTagger(ort, baseUrl, cacheName, onProgress) {
   const session = await ort.InferenceSession.create(modelBytes, { executionProviders: ["wasm"] });
   return async function tag(text) {
     const { ids, offsets, truncated } = tokenizer.encode(text, config.max_length);
-    if (ids.length < 2) return { ...group(text, { mentions: [], claims: [] }), truncated };
+    if (ids.length < 2) return { ...group(text, { mentions: [], claims: [] }), raw: { mentions: [], claims: [] }, truncated };
     const input = new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]);
     const { logits } = await session.run({ input_ids: input });
-    return { ...group(text, decode(text, offsets, logits.data, config.heads)), truncated };
+    const raw = decode(text, offsets, logits.data, config.heads);
+    return { ...group(text, raw), raw, truncated };
   };
 }

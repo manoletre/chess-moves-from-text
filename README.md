@@ -79,7 +79,7 @@ Test texts the model never trained on: **157 real reflections** from 129 puzzles
 
 | | real reflections | synthetic | commentary (v2 test) |
 |---|---|---|---|
-| **mentions, F1** | **0.977** | 0.962 | 0.977 |
+| **mentions, F1** | **0.978** | 0.964 | 0.977 |
 | MOVE / PIECE / SQUARE | 0.947 / 0.974 / 0.992 | 0.964 / 0.935 / 0.989 | 0.991 / 0.892 / 0.955 |
 | FILE / RANK / DIAGONAL | 1.00 / 1.00 / 1.00 | 1.00 / 0.95 / 0.86 | 1.00 / 0.87 / 1.00 |
 | **claims, F1** | **0.936** | 0.866 | – |
@@ -153,7 +153,12 @@ tagger.predict(texts)   # batched, raw spans: [{"mentions": [[s, e, type, line, 
 
 ### 3. The demo page
 
-`web/` is static: the model runs in the browser with [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). Paste a FEN and a text, or pick an example. Hover a move to replay its line, a piece or claim to see the board in its frame. Moves are filled when chosen, struck through when rejected; moves the page can't play from the position are crossed out in grey.
+`web/` is static: the model runs in the browser with [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), and `web/verify.js` (a port of `verify.py`, with the same rules) checks what it found with [chess.js](https://github.com/jhlywa/chess.js). Paste a FEN and a text, or pick an example. The page keeps two layers apart:
+
+- **What the tagger read** (always shown): the moves, as chips (filled = chosen, struck through = rejected), and every fact the checker reads, as one underline: a claim ("cannot go to") or a piece on a square ("rook on h2"). Pieces and squares a fact refers to light up when you hover it; they aren't painted on their own.
+- **What chess.js says** (the "+ chess.js check" toggle): a ✓ / ✗ / ? on every move and fact, verdict-coloured underlines, and a third column in the panel under the text, which lists the chosen move, the lines and every fact with the position it is checked in.
+
+Hover a move to replay its line, or a fact to see the board it's checked on.
 
 ```bash
 python scripts/export_onnx.py          # chess-move-tagger/ -> web/model/ (4-bit, in 50 MB parts)

@@ -22,16 +22,15 @@
         <div class="loader" id="loader" role="progressbar" aria-label="Loading the model"><span></span></div>
       </div>
       <p class="legend">
-        <span class="span span--mention span--MOVE span--chosen">chosen move</span>
-        <span class="span span--mention span--MOVE span--rejected">rejected move</span>
-        <span class="span span--mention span--MOVE span--considered">other move</span>
-        <span class="span span--mention span--PIECE">piece</span>
-        <span class="span span--mention span--SQUARE">square</span>
-        <span class="span span--claim span--CHECK">check / mate</span>
-        <span class="span span--claim span--ATTACKS">attacks</span>
-        <span class="span span--claim span--FLIGHT">flight</span>
-        <span class="span span--claim span--WINS">wins</span>
+        <span class="legend__group">tagger</span>
+        <span class="mk mk--move mk--chosen">chosen move</span>
+        <span class="mk mk--move mk--rejected">rejected</span>
+        <span class="mk mk--move mk--considered">other</span>
+        <span class="mk mk--fact">claim or piece on square</span>
+        <span class="legend__group col-check">chess.js</span>
+        <span class="col-check"><b class="v v--true">✓</b> true <b class="v v--false">✗</b> false <b class="v v--unknown">?</b> can't tell</span>
       </p>
+      <section class="report" id="report" hidden aria-live="polite"></section>
     </section>
 
     <div class="board-frame">
