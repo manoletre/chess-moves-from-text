@@ -4,7 +4,8 @@ Every example is a piece of chess-tutor-style text in which the chess moves and
 board locations are wrapped in double brackets. There are six kinds of span:
 
     [[Qxd5]]     START:    a move played from the current position
-    [[>Ne2]]     CONT:     continues the previous move (it is played after it)
+    [[>Ne2]]     CONT:     continues the most recent series (played after its last move),
+                           even when other text sits in between
     [[@e4]]      SQUARE:   "the pawn on [[@e4]]"
     [[|c-file]]  FILE:     "the [[|c-file]] is open"            (| is a vertical line)
     [[_7th rank]] RANK:    "a rook on the [[_7th rank]]"        (_ is a horizontal line)
@@ -32,8 +33,12 @@ of a regex. Vague references the app couldn't resolve ("the long diagonal",
 "the back rank") are left unlabelled.
 
 Usage:
-    python data/generate_dataset.py            # writes data/{train,val,test}.jsonl
-    python data/generate_dataset.py --train 2000
+    python data/commentary/generate_dataset.py            # writes data/commentary/{train,val,test}.jsonl
+    python data/commentary/generate_dataset.py --train 2000
+
+v2 adds SERIES_TEMPLATES: lines that are interrupted by prose and picked up
+again later ("3...f6 allows 4.Bc4. The best answer would then be 4...exd4"),
+next to new lines that start over ("A better move was 3...exd4").
 """
 
 import argparse
@@ -282,8 +287,8 @@ def sans(board: chess.Board, moves: list[chess.Move]) -> list[str]:
     return out
 
 
-def make_context(rng: random.Random) -> dict:
-    board = random_position(rng)
+def make_context(rng: random.Random, board: chess.Board | None = None) -> dict:
+    board = board or random_position(rng)
     legal = list(board.legal_moves)
     played = pick_move(board, rng)
     others = [m for m in legal if m != played]
@@ -490,6 +495,150 @@ def generate(templates: list[str], n: int, rng: random.Random, source: str) -> l
     return examples
 
 
+# --------------------------------------------------------------------------
+# Series that continue after some prose (added for model v2)
+#
+# Real explanations rarely write a line in one go. They name a move, talk
+# about it, and only later give the next one: "3...f6 allows 4.Bc4, bringing
+# the bishop to c4. The best answer would then be 4...exd4". A CONT continues
+# the most recent series no matter how much text sits in between, while a new
+# START ("A better move was 3...exd4") begins a new series from the current
+# position. These templates put both side by side, so the model has to use the
+# wording ("then", "after that" vs "instead", "the other option") and the move
+# numbers to tell them apart.
+#
+# Placeholders for three lines A, B, C, all starting from the current position:
+#   {A}        the next move of line A (its first move is START, the rest CONT)
+#   {A2} {A3}  the next 2 / 3 moves of line A, written as a run ("dxe5 dxe5 Bc4")
+#   {A*}       the next 2-4 moves of line A (so use it last)
+#   {A0}       A's first move named again, as a START ("After Bxe6, ..."); the
+#              series restarts there and {A} continues it
+#   {A_to}     SQUARE the last-named move of A went to; {A_piece} its piece ("knight")
+# A line can't continue once another one has started, because a CONT always
+# continues the most recent series. Name it again with {A0} first. fill_series
+# enforces this. A0, A2, A4... are played by {mover}, A1, A3... by {opponent}.
+# Everything else ({mover}, {sq}, {file}, {eval}...) comes from make_context.
+# --------------------------------------------------------------------------
+
+SERIES_TEMPLATES = [
+    "{A} is bad because it allows {opponent} to play {A}, bringing the {A_piece} to {A_to}. The best answer would then be {A}. A better move was {B}, leading to {B} and then {B}, attacking the pawn on {sq}.",
+    "The pawn on {sq} is under fire. {mover} can give up the centre with {A}, and after {A} the {A_piece} sits on {A_to}. Keeping the tension with {B} is the other option, but then {B*} puts pressure on {sq2}.",
+    "After {A}, {opponent} has {A}. It looks dangerous, but {mover} can calmly continue with {A}, and only after {A} is it time for {A}.",
+    "{A2} is the main line. At this point the {A_piece} on {A_to} is very strong, and {mover} should follow up with {A}. Note that {B} was also possible.",
+    "Start with {A}. If {opponent} replies {A}, you continue with {A} and the {file} opens up. After that, {A2} is the natural follow-up.",
+    "The engine's idea is {A}. The point is that after {A}, the {A_piece} on {A_to} is overloaded, so {A} wins material ({eval}).",
+    "{A2}, and here comes the key moment: {A}. Now {A*} and {mover} is clearly better ({eval}).",
+    "Instead of {A}, which runs into {A} and {A}, play {B}. The idea is that {B} can be met by {B}, and the {B_piece} lands on {B_to}.",
+    "Why not {A}? Because {opponent} answers {A}, and then the best reply is {A}, after which {A2} leaves {mover} worse. The engine prefers {B}.",
+    "You could try {A}. Your opponent will probably respond with {A}. Then comes {A}, hitting {sq}, and {opponent} has to find {A}.",
+    "What if I play {A} and {opponent} answers {A}?\n\nThen {A} is strong, and after {A} the {A_piece} on {A_to} dominates the board.",
+    "Let's look at {A}.\n\nAfter {A}, {mover} has a clear plan: {A}, and the game might go on {A*}.\n\nA completely different approach, right from the start, is {B}. After {B}, I like {B}.",
+    "The problem with {A} is not the move itself but what comes after: {A2}, and suddenly {A} is very hard to meet.",
+    "In the game {mover} played {A}. {opponent} answered {A}, and here {mover} missed {A}, which would have kept the pressure on {sq}.",
+    "{A} is the main move. After {A}, {mover} continues with {A}, and after {A}, it's time for {A}. Keep {B} in mind as a backup plan.",
+    "Let me go through it move by move. First, {A}: the {A_piece} goes to {A_to}. Second, {opponent} replies {A}. Third, {A}, and the {rank} is under control.",
+    "{A} was the move. After {A}, the correct follow-up is {A}, and {opponent}'s best defence is {A}. If {mover} had played {B} right away, {B2} would have followed.",
+    "There's nothing wrong with {A}, but look at what happens after {A}: the {A_piece} on {A_to} is loose, and {A} picks it up.",
+    "Stockfish ({eval}): {A}. The critical reply is {A}, and now the only move is {A}. Going back to the starting position, {B} is weaker ({eval2}).",
+    "- First, {A}\n- {opponent} replies {A}\n- Then {A*}\n\nAn alternative from the start is {B}, and after {B} {diag} opens.",
+    "{A2} is how the game went. The {A_piece} on {A_to} now controls {sq} and {sq2}, and the {file} is half-open. That's why the next move, {A}, is so strong.",
+    "Consider {A}. If {opponent} responds with {A}, then {A} follows and {diag} opens. {opponent}'s best try is then {A}, but after {A} {mover} is winning.",
+    "Both {A} and {B} are playable. After {A0}, though, {opponent} gets {A}, and {mover} has to find {A} to stay in the game.",
+    "{mover} played {A}. That invites {A}, and after {A} {opponent} must be careful: the only safe move is {A}.",
+    "Is {A} good here? It depends on the reply. The critical test is {A}, and then {A2} is forced. Simply {B} avoids all of this.",
+    "Stockfish's line after {A} begins {A0} {A*}. Before playing it, look at what the {A_piece} on {A_to} is doing. Another move to consider is {B}, and after {B2} {mover} is fine.",
+    "**Short answer:** {A}.\n\n**Why:** after {A}, {mover} plays {A}, and {opponent} can't hold {sq}. If {opponent} tries {A}, {mover} continues with {A}.",
+    "I played {A} and my opponent replied {A}. What should I do now? I was thinking about {A}.",
+    "Was {A} a good idea? My opponent answered {A}, and then I played {A}. Maybe {B} would have been better from the beginning.",
+    "{A3}, and the {A_piece} on {A_to} is a monster. Later {mover} can double on the {file}, but first {A} is needed.",
+    "{A} is natural, but {opponent}'s most annoying answer is {A}, attacking {sq}. {B} avoids that.",
+    "After {A}, don't worry about {A}; you can meet it with {A}, and the pawn on {sq} is safe.",
+]
+
+SERIES_HELDOUT_TEMPLATES = [
+    "{A} is a mistake since it lets {opponent} reply {A}, placing the {A_piece} on {A_to}. Your best response at that point is {A}. Much better was {B}, and after {B} the natural {B} targets {sq}.",
+    "The quiet {A} keeps everything under control. Should {opponent} go for {A}, then {A*} is the way to meet it. By contrast, {B} releases the tension.",
+    "Here's the line I'd expect: {A2}. At that point {mover} has to be careful, and {A} is the only good move. A sharper alternative from the current position is {B}.",
+    "Before playing {A}, ask yourself what {opponent} does next. The answer is {A}, hitting {sq}, and then {A} is forced.",
+    "Q: Is {A} playable?\nA: Yes. {opponent} will likely go {A}, and you continue with {A}. Just don't play {B} instead of {A0}: that loses a pawn.",
+    "Round {moveno}. {mover} thought for a long time before {A}, and after the reply {A} found the strong {A}, eyeing {sq}. {B} was the safer choice.",
+    "Short answer: {A}.\n\nLonger answer: {opponent}'s most testing response is {A}, and I'd meet it with {A}, planning {A*}. The {file} then belongs to {mover}.",
+    "Compare two moves. With {A}, the game goes {A*}. With {B}, {opponent} gets {B}, and after {B} the {rank} is weak.",
+    "{A} looks natural, yet {opponent} has a clever answer in {A}. From there, the correct way to continue is {A}, and {A} is met by {A}.",
+    "My plan was {A}, expecting {A}. But what do I do after that? The engine says {A} ({eval}), and if {opponent} then plays {A}, {A} wins.",
+]
+
+SERIES_SLOT = re.compile(r"\{([ABC])(0|2|3|\*|_to|_piece)?\}")
+SERIES_LENGTH = 10  # moves per line, more than any template uses
+
+
+def series_lines(board: chess.Board, rng: random.Random) -> list[list[chess.Move]] | None:
+    """Three lines from `board` with different first moves, or None if a game ends too soon."""
+    legal = list(board.legal_moves)
+    if len(legal) < 3:
+        return None
+    first = pick_move(board, rng)
+    firsts = [first] + rng.sample([m for m in legal if m != first], 2)
+    lines = [line_from(board, move, rng, SERIES_LENGTH - 1) for move in firsts]
+    return lines if all(len(line) == SERIES_LENGTH for line in lines) else None
+
+
+def fill_series(template: str, rng: random.Random) -> str:
+    while True:
+        board = random_position(rng)
+        lines = series_lines(board, rng)
+        if lines:
+            break
+    ctx = make_context(rng, board)
+    lines = dict(zip("ABC", lines))
+    numbered = rng.random() < 0.4
+    before = {name: board.copy() for name in lines}  # position before the line's next move
+    used = dict.fromkeys(lines, 0)
+    last = {}  # line -> (move, piece type) of its last-named move
+    current = None  # the line a CONT would continue
+
+    def name_moves(name: str, count: int, restart: bool = False) -> str:
+        nonlocal current
+        if restart:  # name the first move again: a new series, always allowed
+            assert used[name], f"{{{name}0}} before {{{name}}}: {template!r}"
+            before[name], used[name] = board.copy(), 0
+        elif used[name] and current != name:
+            raise ValueError(f"line {name} continues after another line started: {template!r}")
+        current = name
+        parts = []
+        for i in range(count):
+            position, move = before[name], lines[name][used[name]]
+            prefix = move_prefix(position, rng) if numbered and (i == 0 or position.turn == chess.WHITE) else ""
+            parts.append(prefix + mark(position.san(move), rng, cont=used[name] > 0, decorate=rng.random() < 0.3))
+            last[name] = (move, position.piece_type_at(move.from_square))
+            position.push(move)
+            used[name] += 1
+        return " ".join(parts)
+
+    def slot(match: re.Match) -> str:
+        name, kind = match.groups()
+        if kind == "_to":
+            return square(chess.square_name(last[name][0].to_square))
+        if kind == "_piece":
+            return PIECE_NAMES[last[name][1]]
+        if kind == "0":
+            return name_moves(name, 1, restart=True)
+        return name_moves(name, {None: 1, "2": 2, "3": 3, "*": rng.randint(2, 4)}[kind])
+
+    text = SERIES_SLOT.sub(slot, template)
+    return fill(text, ctx)
+
+
+def generate_series(templates: list[str], n: int, rng: random.Random, source: str) -> list[dict]:
+    examples = []
+    for _ in range(n):
+        index = rng.randrange(len(templates))
+        example = parse_markup(fill_series(templates[index], rng))
+        example["source"] = f"{source}:{index}"
+        examples.append(example)
+    return examples
+
+
 def load_handwritten() -> list[dict]:
     examples = []
     for line in HANDWRITTEN_FILE.read_text().splitlines():
@@ -525,6 +674,9 @@ def main() -> None:
     parser.add_argument("--train", type=int, default=1000)
     parser.add_argument("--val", type=int, default=150)
     parser.add_argument("--test", type=int, default=150)
+    parser.add_argument("--series-train", type=int, default=500)
+    parser.add_argument("--series-val", type=int, default=75)
+    parser.add_argument("--series-test", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -533,6 +685,13 @@ def main() -> None:
     val = generate(TRAIN_TEMPLATES, args.val, rng, "train_template")
     test = generate(HELDOUT_TEMPLATES, args.test, rng, "heldout_template") + load_handwritten()
     rng.shuffle(test)
+
+    # v2: series that continue after prose. A separate random generator keeps
+    # the v1 examples above identical, so old and new scores stay comparable.
+    series_rng = random.Random(args.seed + 1)
+    train += generate_series(SERIES_TEMPLATES, args.series_train, series_rng, "series_template")
+    val += generate_series(SERIES_TEMPLATES, args.series_val, series_rng, "series_template")
+    test += generate_series(SERIES_HELDOUT_TEMPLATES, args.series_test, series_rng, "series_heldout")
 
     write_jsonl(DATA_DIR / "train.jsonl", train)
     write_jsonl(DATA_DIR / "val.jsonl", val)

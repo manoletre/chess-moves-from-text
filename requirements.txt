@@ -1,3 +1,3 @@
-# Only needed to (re)generate the dataset locally. Training runs in Colab
-# (see notebooks/train_chess_move_tagger.ipynb), which installs its own packages.
+# Only needed to (re)build the datasets locally (data/commentary/generate_dataset.py,
+# scripts/build_dataset.py). For training and the model, see requirements-model.txt.
 chess>=1.10

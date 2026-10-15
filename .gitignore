@@ -4,3 +4,7 @@ __pycache__/
 # trained model output (~920 MB)
 chess-move-tagger/
 .DS_Store
+# browser model, built by scripts/export_onnx.py (~145 MB)
+web/model/
+web/.vercel/
+web/.env*
