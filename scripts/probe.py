@@ -211,7 +211,7 @@ def example(fen, rng, split):
         r = rng.random()
         if r < 0.33:
             t = pick(rng, FLIGHT_NONE, split); families.append("flight:" + t)
-            extra.append(f"{them}'s {{king}}[piece after] {render_claim(t, 'flight', 'after', {})}.")
+            extra.append(f"{{{them}'s king}}[piece after] {render_claim(t, 'flight', 'after', {})}.")
         elif r < 0.66:
             t = pick(rng, FLIGHT_SQ, split); families.append("flight:" + t)
             sq = rng.choice(list(chess.SquareSet(chess.BB_KING_ATTACKS[king_sq])))

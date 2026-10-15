@@ -29,11 +29,18 @@ from chess_tagger.verify import verify  # noqa: E402
 def verdict_agreement(examples, predicted):
     """For texts with a FEN: compare verify() verdicts on gold vs predicted labels, fact by fact."""
     agree, total, by_kind = 0, 0, Counter()
+    chosen_same = texts = unverif_gold = unverif_pred = n_pred = 0
     for e, p in zip(examples, predicted):
         if not e.get("fen") or e.get("claims") is None:
             continue
-        gold = {(f["kind"], f["start"], f["end"]): f["verdict"] for f in verify(e["fen"], e["text"], e)["facts"]}
-        pred = {(f["kind"], f["start"], f["end"]): f["verdict"] for f in verify(e["fen"], e["text"], p)["facts"]}
+        g, q = verify(e["fen"], e["text"], e), verify(e["fen"], e["text"], p)
+        texts += 1
+        chosen_same += g["chosen"] == q["chosen"]
+        unverif_gold += sum(f["verdict"] is None for f in g["facts"])
+        unverif_pred += sum(f["verdict"] is None for f in q["facts"])
+        n_pred += len(q["facts"])
+        gold = {(f["kind"], f["start"], f["end"]): f["verdict"] for f in g["facts"]}
+        pred = {(f["kind"], f["start"], f["end"]): f["verdict"] for f in q["facts"]}
         for key, verdict in gold.items():
             total += 1
             same = pred.get(key, "missing") == verdict
@@ -41,6 +48,9 @@ def verdict_agreement(examples, predicted):
             by_kind[(key[0], same)] += 1
     kinds = sorted({k for k, _ in by_kind})
     return {"facts": total, "same_verdict": agree / total if total else 0.0,
+            "same_chosen_move": chosen_same / texts if texts else 0.0,
+            "unverifiable_share_gold": unverif_gold / total if total else 0.0,
+            "unverifiable_share_pred": unverif_pred / n_pred if n_pred else 0.0,
             "by_kind": {k: by_kind[(k, True)] / max(1, by_kind[(k, True)] + by_kind[(k, False)]) for k in kinds}}
 
 
@@ -90,7 +100,9 @@ def main() -> None:
     if args.verify:
         results["verify_agreement"] = verdict_agreement(examples, predicted)
         v = results["verify_agreement"]
-        print(f"verify.py, same verdict on predicted vs gold labels: {v['same_verdict']:.3f} over {v['facts']} facts")
+        print(f"verify.py, same verdict on predicted vs gold labels: {v['same_verdict']:.3f} over {v['facts']} facts; "
+              f"same chosen move {v['same_chosen_move']:.3f}; unverifiable share gold {v['unverifiable_share_gold']:.3f} "
+              f"/ predicted {v['unverifiable_share_pred']:.3f}")
         print("   " + ", ".join(f"{k} {a:.2f}" for k, a in v["by_kind"].items()))
     print(f"{len(examples)} examples in {elapsed:.1f}s on {tagger.device}", file=sys.stderr)
     if args.out:

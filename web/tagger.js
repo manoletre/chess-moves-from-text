@@ -156,6 +156,17 @@ export function decode(text, offsets, logits, heads) {
     kind === "MOVE" ? attribute(slices.stance, t0, t1) : null,
     kind === "PIECE" ? attribute(slices.frame, t0, t1) : null,
   ]);
+  // a MOVE span with nothing move-like in it ("rook on" in "the rook on g2 delivers mate") is not a move:
+  // a bare piece word becomes a PIECE, a single other word is dropped (mirrors _guard_move in chess_tagger/model.py)
+  const MOVE_LIKE = /[a-h][1-8]|\b[0O]-[0O]|castl|promot|captur|recaptur|\btakes?\b|taking|\bretak/i;
+  const PIECE_ONLY = /^((?:white|black)(?:'s)?\s+)?(king|queen|rook|bishop|knight|pawn)s?(?=(\s+(on|at|from))?$)/i;
+  for (let i = mentions.length - 1; i >= 0; i--) {
+    const m = mentions[i];
+    if (m[2] !== "MOVE" || MOVE_LIKE.test(text.slice(m[0], m[1]))) continue;
+    const piece = text.slice(m[0], m[1]).match(PIECE_ONLY);
+    if (piece) mentions[i] = [m[0], m[0] + piece[0].length, "PIECE", null, null, "AFTER"];
+    else if (text.slice(m[0], m[1]).trim().split(/\s+/).length === 1) mentions.splice(i, 1); // "on": nothing to play
+  }
   const firstMove = mentions.find((m) => m[2] === "MOVE");
   if (firstMove) firstMove[3] = "NEW"; // nothing to continue yet
   const claims = bioSpans(text, offsets, argmaxLabels(slices.claim))

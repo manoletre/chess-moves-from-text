@@ -4,7 +4,7 @@ import { loadTagger } from "./tagger.js";
 import { positionBefore, verify } from "./verify.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
-const MODEL_CACHE = "chess-move-tagger-v3";
+const MODEL_CACHE = "chess-move-tagger-v3.1";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 
 const FILES = "abcdefgh";

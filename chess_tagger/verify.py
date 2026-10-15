@@ -91,10 +91,10 @@ def resolve_move(board: chess.Board, text: str, answered: int | None = None):
         except ValueError:
             return None, "illegal", None
     # UCI ("c6c6" is not a move at all)
-    m = UCI.match(t)
+    m = UCI.match(t.rstrip("+#"))
     if m:
         try:
-            move = chess.Move.from_uci(t)
+            move = chess.Move.from_uci(t.rstrip("+#"))
         except ValueError:
             return None, "illegal", None
         return (move, "ok", None) if move in legal else (None, "illegal", None)
@@ -498,8 +498,10 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
             fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none"))
 
     state["fallback"] = False
-    # the reflection's conclusion: the last chosen move played from the puzzle position
-    chosen = next((mv for mv in reversed(moves) if mv[5] == "CHOSEN" and mv[2] is root), None)
+    # the reflection's conclusion: the last chosen move that can be played from the puzzle position
+    # (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
+    chosen_all = [mv for mv in moves if mv[5] == "CHOSEN" and mv[2] is root]
+    chosen = next((mv for mv in reversed(chosen_all) if mv[3] is not None), chosen_all[-1] if chosen_all else None)
     chosen_uci = chosen[3].uci() if chosen and chosen[3] else None
     summary = {}
     for f in facts:

@@ -49,8 +49,8 @@ export function resolveMove(fen, text, answered = null) {
     const m = legal.find((x) => x.san.replace(/[+#]/, "") === (long ? "O-O-O" : "O-O"));
     return m ? { move: m, status: "ok", note: null } : fail("illegal");
   }
-  if (UCI.test(t)) {
-    const m = legal.find((x) => x.from + x.to + (x.promotion ?? "") === t);
+  if (UCI.test(t.replace(/[+#]+$/, ""))) {
+    const m = legal.find((x) => x.from + x.to + (x.promotion ?? "") === t.replace(/[+#]+$/, ""));
     return m ? { move: m, status: "ok", note: null } : fail("illegal");
   }
   const san = t.match(/^([KQRBN])?([a-h])?([1-8])?x?([a-h][1-8])(?:=?([QRBN]))?[+#]?$/);
@@ -422,7 +422,9 @@ export function verify(fen, text, raw) {
     lines.at(-1).moves.push(mv);
   }
   // the reflection's conclusion: the last chosen move played from the puzzle position
-  const chosen = [...moves].reverse().find((mv) => mv.stance === "CHOSEN" && mv.before === fen) ?? null;
+  // (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
+  const chosenAll = moves.filter((mv) => mv.stance === "CHOSEN" && mv.before === fen);
+  const chosen = [...chosenAll].reverse().find((mv) => mv.move) ?? chosenAll.at(-1) ?? null;
   return { facts: facts.sort((a, b) => a.start - b.start), moves, lines, chosen };
 }
 

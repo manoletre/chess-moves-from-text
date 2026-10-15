@@ -112,12 +112,30 @@ def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool 
         elif kind == "PIECE":
             frame = attribute("frame", FRAMES, t0, t1)
         mentions.append([start, end, kind, line, stance, frame])
+    mentions = [m for m in (_guard_move(text, m) for m in mentions) if m is not None]
     first_move = next((m for m in mentions if m[2] == "MOVE"), None)
     if first_move is not None and first_move_new:
         first_move[3] = "NEW"  # nothing to continue yet
     claims = [[s, e, k, attribute("frame", FRAMES, t0, t1)]
               for s, e, k, t0, t1 in bio_spans(text, offsets, [HEADS["claim"][i] for i in claim_ids])]
     return {"mentions": mentions, "claims": claims}
+
+
+MOVE_LIKE = re.compile(r"[a-h][1-8]|\b[0O]-[0O]|castl|promot|captur|recaptur|\btakes?\b|taking|\bretak", re.I)
+PIECE_ONLY = re.compile(r"^((?:white|black)(?:'s)?\s+)?(king|queen|rook|bishop|knight|pawn)s?(?=(\s+(on|at|from))?$)", re.I)
+
+
+def _guard_move(text: str, m: list):
+    """A MOVE span with nothing move-like in it ("rook on" in "the rook on g2 delivers mate") is not a move:
+    a bare piece word becomes a PIECE (frame after: it comes after the move being discussed), a single other
+    word ("on") is dropped. Prose with a verb ("the queen checks") is kept."""
+    span = text[m[0]:m[1]]
+    if m[2] != "MOVE" or MOVE_LIKE.search(span):
+        return m
+    piece = PIECE_ONLY.match(span)
+    if piece:
+        return [m[0], m[0] + piece.end(), "PIECE", None, None, "AFTER"]
+    return None if len(span.split()) == 1 else m  # "on", "it": nothing to play; "queen checks" stays
 
 
 class ChessTagger:
