@@ -62,7 +62,7 @@ def check_file(path, frames: bool = False) -> int:
     for row in load(path):
         original = raw[row["id"]]["text"] if row["id"] in raw else None
         problems = check(row["marked"], original, frames=frames)
-        if row["id"] not in raw and row["id"] not in synthetic and not row["id"].startswith("s"):
+        if row["id"] not in raw and row["id"] not in synthetic and not row["id"].startswith(("s", "p", "t")):
             problems.append("unknown id")
         if problems:
             n_bad += 1

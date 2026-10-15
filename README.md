@@ -15,7 +15,7 @@ The model is [LiquidAI/LFM2.5-Encoder-230M](https://huggingface.co/LiquidAI/LFM2
 
 **Live demo: [chess-annotator.vercel.app](https://chess-annotator.vercel.app)**. The model runs in your browser; nothing is sent to a server.
 
-## What it finds (v3)
+## What it finds (v3.2)
 
 ```
 {Qxc3+}[move new rejected] <gives check>[check after] but White can {recapture the queen}[move next rejected],
@@ -29,7 +29,7 @@ the {king}[piece after] <cannot go to>[flight after] {d2}[square] because the {q
 | **line** | `NEW` from the current position · `NEXT` after the previous move · `ALT` another reply from the same position as the previous move | MOVE spans |
 | **stance** | `CHOSEN` · `REJECTED` · `CONSIDERED` (a property of the whole line) | MOVE spans |
 | **frame** | `NOW` the current position · `AFTER` the position after the last move mentioned before it | PIECE spans and claims |
-| **claim** (BIO) | `CHECK`, `MATE`, `WINS`, `ATTACKS` (covers, controls, defends, pinned…), `FLIGHT` (can / cannot go to, boxed in…) | every token |
+| **claim** (BIO) | `CHECK`, `MATE` (incl. "it's over", "the king is dead", "Black resigns"), `WINS`, `ATTACKS` (covers, controls, defends, pinned…), `FLIGHT` (can / cannot go to, boxed in…), `EVAL` ("decisive", "the winning idea", "Black is lost", "a mistake"; v3.2) | every token |
 
 Claims are the predicate words only, negation included (`<cannot go to>`); their subject and objects are the mentions around them. The full labelling rules, with the edge cases decided along the way, are in [`data/reflections/LABELING.md`](data/reflections/LABELING.md).
 
@@ -61,37 +61,49 @@ What `verify` checks (all with python-chess, in the claim's frame):
 
 | fact | true when |
 |---|---|
-| `legal_move` | the move (any notation, prose resolved against the legal moves) is legal where its line says it is played. Ambiguous prose → unverifiable |
+| `legal_move` | the move (any notation; prose resolved against the legal moves) is legal where its line says it is played. "Recaptures" / "takes it" is resolved on the square of the move it answers; "checks" / "delivers checkmate" inside a prose move narrows it down. Still ambiguous → unverifiable |
 | `check` / `mate` | the frame position is check / checkmate (also `+` / `#` in SAN, and "delivers checkmate" inside a prose move) |
 | `capture` | an `x` move really captures |
 | `wins` | the move it's about captures (the named piece, if one is named) |
-| `attacks` | the subject piece attacks every target square/piece (or none, if negated); "undefended" = no defenders; "pinned" = pinned |
-| `flight` | the king can reach the named squares (or can't, for "cannot go to", "blocks", "boxed in"…); with no squares, "has no escape" = no king moves |
-| `placement` | "the queen on h7": that piece (and colour, if named) is on that square in the frame |
+| `attacks` | the subject piece attacks every target (or none, if negated). Targets: squares, pieces, a file/rank/diagonal ("controls the e-file": a line piece on it), or the square named just before ("covers **it**", "that square", "both"). Passive voice ("g1 is covered by the rook on g2") swaps subject and object. "Undefended" = no defenders, "pinned" = pinned to its king, "cannot reach" excludes squares its own pieces stand on. A named piece that isn't there ("the rook on c7 covers…") makes the claim false |
+| `flight` | the king can reach the named squares (or can't, for "cannot go to", "blocks", "boxed in"…); with no squares, "has no escape" = no king moves. A king with no colour named is the defender's |
+| `placement` | "the queen on h7", "the g2 pawn", "the bishop on the a4-e8 diagonal": that piece (and colour, if named) is there in the frame. A move written from the wrong square ("the bishop on e5 slides to f7" with the bishop on d5) resolves, and adds a false placement |
 
-Plus `chosen` (the first CHOSEN move from the puzzle position, as UCI) and `matches_played`.
+Decoding guard: a MOVE span with nothing move-like in it ("rook on" in "the rook on g2 delivers mate") is turned into a PIECE (a bare piece word) or dropped (a single other word), so a broken span can't become the chosen move.
+
+How positions are chosen: a claim is checked in its frame (now, or after the last move before it). After a move that **can't be played** (illegal or hallucinated), it is checked in the last real position instead, and its detail says "(checked before the unplayable move)". Before v3.1 those claims were all unverifiable; on gold labels this cut the unverifiable share from 0.23 to 0.07. A piece called by the square it just left ("Rxh7 … the rook on g7 covers g8") is the piece that moved.
+
+| `eval` | (v3.2) needs `best=`, the puzzle's solution move. A positive evaluation ("decisive", "the winning idea", "unstoppable") is true if the move it is about (nearest move in its sentence, else the chosen move) is the solution; a negative one ("a mistake", "too slow", "falls short") if it isn't; "Black is lost" / "White is winning" are about sides. Without `best`, unverifiable |
+
+Plus `chosen` (the **last** CHOSEN move from the puzzle position, i.e. the conclusion, as UCI) and `matches_played`. `resolve(board, text)` keeps its `(move, status)` shape; `resolve_move(board, text, answered)` also returns the wrong-square note.
+
+`web/verify.js` is a port with the same rules; on all 1,000 gold-labelled texts it reaches the same verdict as `verify.py` for every one of 17,412 facts and every chosen move.
+
+**Auditing for reward hacking (v3.2).** A process reward only penalises claims the tagger finds, so a policy can learn to phrase false confidence in wording the tagger misses. `chess_tagger.audit.audit(text, tagged, report)` checks every reflection against a fixed lexicon of mate / evaluation / check wording that is independent of the model, and returns the hits no tagged claim covers, plus flags (`untagged_mate`, `untagged_eval`, `no_checkable_facts`, …). Log the flag rates during RL: a rising rate means the policy found phrasings the tagger misses. Collect those samples and add them to the training data. The demo shows the same audit (`web/audit.js`, generated from the Python lexicon by `scripts/sync_audit_js.py`).
 
 **Using it as a reward.** Suggested, not built in: score the share of *false* facts per reflection (tactical kinds weighted most), cap how many facts count so listing legal moves can't farm reward, require `matches_played`, and treat a high share of *unverifiable* facts as a smell rather than a safe neutral, or RL will learn to write vague prose the rules can't check. Keep the puzzle outcome as the dominant term.
 
-## Results (model v3)
+## Results (model v3.2)
 
-Test texts the model never trained on: **157 real reflections** from 129 puzzles that are not in training, **46 held-out synthetic reflections**, and the **294 v2 commentary** test texts. A span counts only if its start, end **and** type are exactly right; line / stance / frame accuracy is measured on the spans found exactly (`python scripts/evaluate.py --verify`).
+Test texts the model never trained on: **157 real reflections** from 129 puzzles not in training, **153 held-out synthetic reflections** (other styles, including faked-confidence ones written for v3.2), the **294 v2 commentary** test texts, and the **probe**: 500 templated reflections whose wording comes from phrase lists the model never saw in training (`scripts/probe.py`). A span counts only if its start, end **and** type are exactly right (`python scripts/evaluate.py --verify`).
 
 | | real reflections | synthetic | commentary (v2 test) |
 |---|---|---|---|
-| **mentions, F1** | **0.977** | 0.962 | 0.977 |
-| MOVE / PIECE / SQUARE | 0.947 / 0.974 / 0.992 | 0.964 / 0.935 / 0.989 | 0.991 / 0.892 / 0.955 |
-| FILE / RANK / DIAGONAL | 1.00 / 1.00 / 1.00 | 1.00 / 0.95 / 0.86 | 1.00 / 0.87 / 1.00 |
-| **claims, F1** | **0.936** | 0.866 | – |
-| CHECK / MATE / WINS | 0.958 / 0.899 / 0.927 | 0.945 / 0.903 / 0.903 | – |
-| ATTACKS / FLIGHT | 0.959 / 0.923 | 0.838 / 0.721 | – |
-| line / stance / frame accuracy | 0.997 / 0.997 / 0.988 | 0.982 / 0.973 / 0.998 | 0.983 / – / – |
+| **mentions, F1** | **0.984** | 0.979 | 0.993 |
+| **claims, F1** | **0.925** | 0.831 | – |
+| CHECK / MATE / WINS | 0.952 / 0.895 / 0.879 | 0.912 / 0.854 / 0.837 | – |
+| ATTACKS / FLIGHT / EVAL | 0.948 / 0.923 / 0.882 | 0.812 / 0.707 / 0.855 | – |
+| line / stance / frame accuracy | 0.995 / 0.998 / 0.989 | 0.981 / 0.968 / 0.999 | 0.966 / – / – |
 
-**Does it matter for the reward?** On the test texts with a FEN, `verify.py` reaches the same verdict from the model's labels as from the hand labels for **95.1% of 3,558 facts** (legal_move 0.96, check 0.95, placement 0.98, attacks 0.92, flight 0.93, mate 0.92, wins 0.90).
+**Faked confidence.** 40 ways of claiming mate ("finishes it", "the king is dead", "Black is lost", "is #", "is decisive", …), each written after a move that is *not* mate and *not* the solution: v3.1 left 20 of them untagged (free for a policy); **v3.2 tags and checks 39 of 40 as false**. Written after the real mate, 38 of 40 come out true. The one it misses ("the attack crashes through") is too vague to check.
 
-The 4-bit browser model scores 0.978 / 0.922 (mentions / claims) on real reflections and 0.972 on commentary.
+**Probe (unseen wording):** moves 0.96, claims attacks 0.93 / flight 0.89 / EVAL 0.82 / mate 0.75 / check 0.68 / wins 1.00.
 
-For comparison, v2 scored 0.958 on the commentary test set with its own (START/CONT) labels; v3 keeps that use case (moves 0.991, line 0.983) while adding the rest.
+**What the reward sees.** On the 263 test texts with a FEN, `verify.py` reaches the same verdict from v3.2's labels as from the hand labels for **94.3% of 4,751 facts**, and the same chosen move in **99.0%** of texts. (EVAL facts are unverifiable here because the test set has no solution moves; the RL loop passes them.)
+
+The 4-bit browser model scores 0.982 / 0.914 (mentions / claims) on real reflections and 0.991 on commentary.
+
+v3.1 → v3.2: real reflections 0.985 / 0.930 → 0.984 / 0.925 (the claims now include EVAL), commentary 0.977 → 0.993, same chosen move 0.985 → 0.990.
 
 ## Data
 
@@ -101,7 +113,14 @@ data/
   reflections/
     raw.jsonl              # 800 real reflections from the chessLLM puzzle model, with FEN and the move played
     labels/b00..b15.jsonl  # their labels in the v3 markup (hand-labelled, see LABELING.md)
-    synthetic/             # hand-written reflections in other styles: UCI, prose-only, negation, coach style, garbled, wrong claims
+    synthetic/             # synthetic.jsonl: 200 reflections in other styles (UCI, prose-only, negation, coach, garbled, wrong claims)
+                           # paraphrase_a/b.jsonl (v3.1): 250 more, aimed at what the probe found missing: claim wording,
+                           #   alternative replies, passive voice and pronouns, pieces on lines, RL-drift styles, mixed notation
+                           # templated.jsonl: 600 from scripts/probe.py, train half of the phrase lists (never in test)
+                           # fake_claims_a/b.jsonl (v3.2): 200 reflections that fake confidence (false mates, "decisive",
+                           #   "Black is lost", repetition, vague-but-confident) next to honest ones
+                           # (v3.2 also labelled game-ending wording and evaluations in all earlier labels: scripts/relabel_v32.py)
+  probe/probe.jsonl        # 500 templated reflections from the probe half of the phrase lists: tests unseen wording
     LABELING.md            # the labelling guide
     batches/               # what each labeller got (id, FEN, side to move, played move, text)
   commentary/              # the v1/v2 chess-tutor data (generate_dataset.py, handwritten.txt, {train,val,test}.jsonl)
@@ -126,14 +145,14 @@ One line of `data/*.jsonl`:
 
 ### 1. Download it
 
-The weights live in the [GitHub release](https://github.com/manoletre/chess-moves-from-text/releases/tag/model-v3.0.0), not in git:
+The weights live in the [GitHub release](https://github.com/manoletre/chess-moves-from-text/releases/tag/model-v3.2.0), not in git:
 
 ```bash
-gh release download model-v3.0.0 --pattern 'chess-move-tagger-v3.zip'
-unzip chess-move-tagger-v3.zip        # creates ./chess-move-tagger/ (~920 MB, for Python)
+gh release download model-v3.2.0 --pattern 'chess-move-tagger-v3.2.zip'
+unzip chess-move-tagger-v3.2.zip        # creates ./chess-move-tagger/ (~920 MB, for Python)
 ```
 
-`chess-move-tagger-v3-web.zip` is the 4-bit browser model; unzip it into `web/` to get `web/model/`.
+`chess-move-tagger-v3.2-web.zip` is the 4-bit browser model; unzip it into `web/` to get `web/model/`.
 
 ### 2. Call it from Python
 
@@ -153,7 +172,12 @@ tagger.predict(texts)   # batched, raw spans: [{"mentions": [[s, e, type, line, 
 
 ### 3. The demo page
 
-`web/` is static: the model runs in the browser with [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). Paste a FEN and a text, or pick an example. Hover a move to replay its line, a piece or claim to see the board in its frame. Moves are filled when chosen, struck through when rejected; moves the page can't play from the position are crossed out in grey.
+`web/` is static: the model runs in the browser with [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), and `web/verify.js` (a port of `verify.py`, with the same rules) checks what it found with [chess.js](https://github.com/jhlywa/chess.js). Paste a FEN and a text, or pick an example. The page keeps two layers apart:
+
+- **What the tagger read** (always shown): the moves, as chips (filled = chosen, struck through = rejected), and every fact the checker reads, as one underline: a claim ("cannot go to") or a piece on a square ("rook on h2"). Pieces and squares a fact refers to light up when you hover it; they aren't painted on their own.
+- **What chess.js says** (the "+ chess.js check" toggle): a ✓ / ✗ / ? on every move and fact, verdict-coloured underlines, and a third column in the panel under the text, which lists the chosen move, the lines and every fact with the position it is checked in.
+
+Hover a move to replay its line, or a fact to see the board it's checked on.
 
 ```bash
 python scripts/export_onnx.py          # chess-move-tagger/ -> web/model/ (4-bit, in 50 MB parts)
@@ -189,18 +213,23 @@ data/           # see above
 
 ## Known limitations
 
-- **Labels come from Claude subagents, not humans.** 16 labellers each did 50 reflections with the guide (plus a pilot batch and decisions fed back into the guide); they were spot-checked, and every text passes the markup checks, but no human has reviewed all 1,000. A few corners were decided differently by different labellers: a move played *before* the puzzle position written in SAN, and "the rook delivers checkmate on f8" as one prose move vs piece + claim + square.
-- **Frames follow text order.** In practice every labeller converged on "`now` before the first move, `after` from then on" (exceptions: "already…" sentences). So the frame head mostly learned that rule. A claim that sums up a candidate after its replies were listed ("…the king slips away to g4 or g6, so there is no forced mate") is framed after the last reply, not after the candidate.
-- **`alt` and `considered` are rare** (16 and 64 of ~4,100 moves), so the model's accuracy on them is not well measured.
-- **Linking is rule-based.** `verify.py` attaches a claim to the nearest move/piece before it in its clause; this is not measured against gold links. Long sentences with several subjects can get linked wrong.
-- **Prose moves without a square** ("White can recapture the queen") are often ambiguous and come out unverifiable.
-- **One source model.** The real reflections all come from one LFM2.5-1.2B chessLLM lineage (SFT and GRPO). The 200 synthetic texts cover other styles, but coach-style claims (0.67) and flight claims in synthetic text (0.72) are clearly weaker.
+- **Labels come from Claude subagents, not humans.** 16 labellers each did 50 real reflections with the guide, more agents wrote the synthetic sets, and a consistency pass fixed the conventions they disagreed on most (see `LABELING.md` section 6). Every text passes the markup checks and they were spot-checked, but no human has reviewed all 1,750 fully labelled texts.
+- **Frames follow text order.** Labellers converged on "`now` before the first move, `after` from then on" (plus "already…", "right now…"), so the frame head mostly learned that rule. A claim that sums up a candidate after its replies ("…the king slips away to g4 or g6, so there is no forced mate") is framed after the last reply, not after the candidate.
+- **`alt` and `considered` are still rare** (57 and 78 of 6,051 moves).
+- **Unseen wording is still the weak spot.** On the probe, mate and check claims phrased in new ways are found 75% and 68% of the time, and synthetic flight claims score 0.71 F1. A reward that only penalises *found* false claims can be gamed by phrasing claims the tagger misses: run `chess_tagger.audit` in the RL loop, watch its flag rates, and add new phrasings to the training data.
+- **EVAL needs the solution move.** Without `best=`, every evaluation is unverifiable; with it, "decisive" means "this is the puzzle's solution", which is right for puzzles but not for positions with several good moves.
+- **The probe is templated**: it tests wording, not sentence structure, so its numbers are an upper bound for truly free text.
+- **Linking is rule-based.** `verify.py` attaches a claim to the nearest move/piece before it in its clause (plus passive voice and "it / that square"); this is not measured against gold links. Long sentences with several subjects can get linked wrong.
+- **Claims after an unplayable move are checked in the last real position.** That turns most of them from unverifiable into false, which is usually right (the claimed position doesn't exist), but it means a hallucinated move costs more than the single false `legal_move` fact.
+- **One source model.** The real reflections all come from one LFM2.5-1.2B chessLLM lineage (SFT and GRPO).
 - **Not labelled:** evaluations ("best", "decisive", "wins the initiative"), threats that aren't checks, and lines from another position.
-- **Commentary pieces** were added to the v2 data with a regex, so `PIECE` on commentary is only as good as that regex.
+- **Commentary pieces** were added to the v2 data with a regex, so `PIECE` on commentary is only as good as that regex (0.95 F1).
 
 ## History
 
-- **v3** (this version): new label design for LLM reflections: prose moves, stance, alternative replies, pieces, frames and claims, trained on 800 real reflections + synthetic ones + the v2 data. `verify.py`.
+- **v3.2** (this version): built against reward hacking. Game-ending wording ("finishes it", "the king is dead", "is #") is a `mate` claim, and a new `EVAL` claim covers "decisive", "the winning idea", "Black is lost", "a mistake", checked against the puzzle's solution move. 450 new training reflections, 200 of them written to fake confidence, plus a pass that labelled these in the existing data. `chess_tagger.audit` flags confident wording the tagger misses. Checker: contractions negate ("isn't decisive"), "unstoppable" no longer does, "there is no defence" is a mate claim, not a negated one.
+- **v3.1**: a probe with unseen wording showed v3 missed many moves and claims phrased differently from the RL model's own reflections; +750 training reflections aimed at those gaps, a consistency pass over the labels (king captures as possibilities, colours inside piece spans), and many checker fixes so that fewer facts end up unverifiable (see "Checking a reflection"). Long texts are tagged in sentence chunks instead of being cut off at 512 tokens.
+- **v3**: new label design for LLM reflections: prose moves, stance, alternative replies, pieces, frames and claims, trained on 800 real reflections + synthetic ones + the v2 data. `verify.py`.
 - **v2**: series that continue after prose (500 extra commentary examples). Test F1 0.958 on commentary.
 - **v1**: moves (START/CONT) and squares, files, ranks, diagonals in chess-tutor commentary.
 

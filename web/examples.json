@@ -1,47 +1,66 @@
 [
   {
-    "label": "Puzzle reflection",
+    "label": "Weighs two candidates, then mates",
     "fen": "1r6/p3Nppk/8/7b/6P1/3r1BK1/PP5R/8 w - - 9 31",
-    "text": "White has a rook on h2 and a knight on e7 bearing down on the Black king on h7, but the king is completely trapped: the rook on d3 is pinned to the king by the knight on e7, the rook on b8 is pinned to the king by the knight on e7, and the Black pawn on g7 blocks the g7 escape square. The alternative Ng6+ gives check but the king can step to g8 and escape. The rook on h2 can instead slide to h5, delivering check along the h-file; the king cannot go to g8 because the rook on h2 covers it, cannot go to g7 because the Black pawn on g7 blocks it, and cannot go to h6 because the rook on h2 controls that square. So the move is Rh5#."
+    "text": "White has a rook on h2 and a knight on e7 bearing down on the Black king on h7, but the king is completely trapped: the rook on d3 is pinned to the king by the knight on e7, the rook on b8 is pinned to the king by the knight on e7, and the Black pawn on g7 blocks the g7 escape square. The alternative Ng6+ gives check but the king can step to g8 and escape. The rook on h2 can instead slide to h5, delivering check along the h-file; the king cannot go to g8 because the rook on h2 covers it, cannot go to g7 because the Black pawn on g7 blocks it, and cannot go to h6 because the rook on h2 controls that square. So the move is Rh5#.",
+    "group": "reflection",
+    "best": "h2h5"
   },
   {
-    "label": "Rejected lines",
+    "label": "Refutes a line with two replies",
     "fen": "6k1/QBP2pp1/7p/1P2P2b/8/5qP1/6rP/4R2K b - - 2 36",
-    "text": "Black has a rook on g2 and a queen on f3, while White's king is trapped on h1 with the queen on a7 and rook on e1. The rook on g2 already covers g1, g2, and h2, and the queen on f3 covers g3 and h3. The white king has no escape squares: g1 is covered by the rook on g2, g2 is covered by the rook on g2, and h2 is covered by the rook on e1. The queen on f3 also covers f1, so the king cannot go to f1. The alternative Qxf1+ would allow White to recapture the queen, and the king would simply escape to g2, escaping the mating net. The rook on g2 delivers immediate checkmate."
+    "text": "Black has a rook on g2 and a queen on f3, while White's king is trapped on h1 with the queen on a7 and rook on e1. The rook on g2 already covers g1, g2, and h2, and the queen on f3 covers g3 and h3. The white king has no escape squares: g1 is covered by the rook on g2, g2 is covered by the rook on g2, and h2 is covered by the rook on e1. The queen on f3 also covers f1, so the king cannot go to f1. The alternative Qxf1+ would allow White to recapture the queen, and the king would simply escape to g2, escaping the mating net. The rook on g2 delivers immediate checkmate.",
+    "group": "reflection",
+    "best": "g2g3"
   },
   {
-    "label": "After RL",
+    "label": "After RL: one template, instant \"mate\"",
     "fen": "8/p6k/1p1P2p1/2p1B2p/4Q1b1/1B6/PP1q2K1/5r2 w - - 1 43",
-    "text": "The queen slides to e2 delivering immediate checkmate, as the black king on h7 is hemmed in by its own pawns on h5 and g6, the rook on f1, and the queen itself. The queen's diagonal from e4 to e2 covers the entire e-file, while the bishop on b3 and the pawns on g6 and h5 block the king's escape routes. No black piece can interpose or capture the queen, and the rook on f1 is too far to intervene. This is the only legal and decisive move, making Qe2# the strongest and fastest path to mate."
+    "text": "The queen slides to e2 delivering immediate checkmate, as the black king on h7 is hemmed in by its own pawns on h5 and g6, the rook on f1, and the queen itself. The queen's diagonal from e4 to e2 covers the entire e-file, while the bishop on b3 and the pawns on g6 and h5 block the king's escape routes. No black piece can interpose or capture the queen, and the rook on f1 is too far to intervene. This is the only legal and decisive move, making Qe2# the strongest and fastest path to mate.",
+    "group": "reflection",
+    "best": "g2f1"
   },
   {
-    "label": "Engine report",
+    "label": "Faked confidence (what RL might learn)",
+    "group": "reflection",
+    "best": "h2h5",
+    "fen": "1r6/p3Nppk/8/7b/6P1/3r1BK1/PP5R/8 w - - 9 31",
+    "text": "Ng6+ and it's over: the king is dead and Black can only resign. Ng6+ is crushing, the cleanest win on the board. The rook on h2 can wait."
+  },
+  {
+    "label": "Engine summary with lines",
     "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
-    "text": "Stockfish prefers Black's Bc5 over Nd4. In this short search, Nd4 loses about 1.1 pawns of evaluation. The game continued Nd4 Nxe5 Qg5 Nxf7 Qxg2 Rf1 Qxe4+ Be2 Nf3#. Stockfish's line after Bc5 begins Bc5 c3 Nf6 d4 exd4.\n\nNd4 sets a trap: the pawn on e5 looks free, but taking it opens the g-file for Black's queen."
+    "text": "Stockfish prefers Black's Bc5 over Nd4. In this short search, Nd4 loses about 1.1 pawns of evaluation. The game continued Nd4 Nxe5 Qg5 Nxf7 Qxg2 Rf1 Qxe4+ Be2 Nf3#. Stockfish's line after Bc5 begins Bc5 c3 Nf6 d4 exd4.\n\nNd4 sets a trap: the pawn on e5 looks free, but taking it opens the g-file for Black's queen.",
+    "group": "commentary"
   },
   {
-    "label": "Tutor chat",
+    "label": "Tutor explains a trap",
     "fen": "r1bqkb1r/ppp2ppp/2n2n2/3Pp1N1/2B5/8/PPPP1PPP/RNBQK2R b KQkq - 0 5",
-    "text": "Nxd5 walks into the Fried Liver Attack. The critical line is Nxd5 **Nxf7!** Kxf7 Qf3+ Ke6 Nc3, and the black king is stuck on e6 in the middle of the board.\n\nStockfish prefers **Na5**, hitting the bishop on c4, which rakes the a2-g8 diagonal."
+    "text": "Nxd5 walks into the Fried Liver Attack. The critical line is Nxd5 **Nxf7!** Kxf7 Qf3+ Ke6 Nc3, and the black king is stuck on e6 in the middle of the board.\n\nStockfish prefers **Na5**, hitting the bishop on c4, which rakes the a2-g8 diagonal.",
+    "group": "commentary"
   },
   {
-    "label": "Square or move?",
+    "label": "e5: a square or a move?",
     "fen": "rnbqkbnr/ppp2ppp/3p4/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq - 0 3",
-    "text": "The pawn on e5 is under fire. Black can give up the centre with exd4, and after Nxd4 the knight sits on d4 in the middle of the board. Keeping the tension with Nd7 is the other option, but then dxe5 dxe5 Bc4 puts pressure on f7."
+    "text": "The pawn on e5 is under fire. Black can give up the centre with exd4, and after Nxd4 the knight sits on d4 in the middle of the board. Keeping the tension with Nd7 is the other option, but then dxe5 dxe5 Bc4 puts pressure on f7.",
+    "group": "commentary"
   },
   {
-    "label": "Files, ranks & diagonals",
+    "label": "Files, ranks and diagonals",
     "fen": "r2q1rk1/pb1nbppp/5n2/2pp2B1/8/2NBPN2/PP3PPP/2RQ1RK1 w - - 0 12",
-    "text": "Black's hanging pawns on c5 and d5 control the centre, but they are also targets. White wants rooks on the d-file and the c-file: Qe2 Qa5 Rfd1 is the typical plan, and the bishop on b7 has to keep watching the a8-h1 diagonal. Nothing is happening on the 8th rank yet."
+    "text": "Black's hanging pawns on c5 and d5 control the centre, but they are also targets. White wants rooks on the d-file and the c-file: Qe2 Qa5 Rfd1 is the typical plan, and the bishop on b7 has to keep watching the a8-h1 diagonal. Nothing is happening on the 8th rank yet.",
+    "group": "commentary"
   },
   {
-    "label": "Not chess talk",
+    "label": "Chess-like words that aren't chess",
     "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-    "text": "Before we start: save the PGN file, and check your rank on the club ladder (you finished 3rd). Now the game. e4 e5 Nf3 attacks the pawn on e5, and Nc6 defends it. The e-file stays closed for now."
+    "text": "Before we start: save the PGN file, and check your rank on the club ladder (you finished 3rd). Now the game. e4 e5 Nf3 attacks the pawn on e5, and Nc6 defends it. The e-file stays closed for now.",
+    "group": "commentary"
   },
   {
-    "label": "Opening line",
+    "label": "Opening moves, then a bishop on a diagonal",
     "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-    "text": "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7: the main line of the Ruy Lopez. White's bishop sits on the a4-e8 diagonal, and a rook will soon come to the e-file."
+    "text": "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7: the main line of the Ruy Lopez. White's bishop sits on the a4-e8 diagonal, and a rook will soon come to the e-file.",
+    "group": "commentary"
   }
 ]

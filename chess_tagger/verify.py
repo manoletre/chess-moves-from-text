@@ -31,13 +31,26 @@ PIECES = {"pawn": chess.PAWN, "knight": chess.KNIGHT, "bishop": chess.BISHOP,
           "rook": chess.ROOK, "queen": chess.QUEEN, "king": chess.KING}
 PIECE_WORD = re.compile(r"\b(pawn|knight|bishop|rook|queen|king)s?\b", re.I)
 SQUARE = re.compile(r"\b([a-h][1-8])\b")
-NEGATION = re.compile(r"\b(not|no|cannot|can't|can not|never|without|nowhere|nothing|none|un\w+|longer)\b", re.I)
-RESTRICTIVE = re.compile(r"box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal", re.I)
+# "isn't", "doesn't", "can't" ... are negations; "un-" words are, except the ones that intensify a claim
+NEGATION = re.compile(r"\b(not|no|cannot|can not|never|without|nowhere|nothing|none|longer|\w+n't|"
+                      r"un(?!stoppable|avoidable|answerable|parr|stopp|deniabl|questionabl)\w+)\b", re.I)
+RESTRICTIVE = re.compile(r"box|trap|hem|seal|block|cut off|stuck|cramp|occup|no escape|nowhere|cannot|can't|no legal|helpless|caught|netted|no moves|no squares", re.I)
 CAPTURE_VERB = re.compile(r"\b(captur\w*|takes?|taking|recaptur\w*|grab\w*|win\w*|snap\w*)\b", re.I)
 PROMOTION = re.compile(r"promot\w*\s+(?:to\s+)?(?:an?\s+)?(queen|rook|bishop|knight)|=([QRBN])", re.I)
 CASTLE = re.compile(r"castl\w*\s*(short|long|kingside|queenside|king-side|queen-side)?|\b([0O]-[0O](?:-[0O])?)\b", re.I)
 UCI = re.compile(r"^([a-h][1-8])([a-h][1-8])([qrbn])?$")
 TWO_SQUARES = re.compile(r"([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])")
+FALLBACK = " (checked before the unplayable move)"
+NEGATIVE_EVAL = re.compile(r"mistake|blunder|error|loses|losing|fails|falls short|\bbad\b|weak|wrong|refuted|dubious|"
+                           r"too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\bdud\b|"
+                           r"pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura", re.I)
+NEGATED_END = re.compile(r"(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)", re.I)
+REACH = re.compile(r"reach|go to|move to|get to|land on|jump to", re.I)
+ANAPHORA = re.compile(r"\s*(that square|this square|those squares|these squares|it\b|them\b|both)", re.I)
+SENTENCE_END = re.compile(r"[.;!?\n]")
+RECAPTURE = re.compile(r"\b(recaptur\w*|takes? (it|back)|captur\w* (it|back)|retak\w*)\b", re.I)
+MATE_WORD = re.compile(r"mate\b", re.I)
+CHECK_WORD = re.compile(r"\bcheck", re.I)
 CLAUSE_END = re.compile(r"[.;:!?\n]|,\s*(?:but|while|and then|so|because|as|whereas)\b|\bbut\b|\bbecause\b")
 
 
@@ -60,45 +73,61 @@ def color_of(text: str):
 
 def resolve(board: chess.Board, text: str):
     """Move text (any notation) -> (move | None, status) with status 'ok', 'illegal' or 'ambiguous'."""
+    move, status, _ = resolve_move(board, text)
+    return move, status
+
+
+def resolve_move(board: chess.Board, text: str, answered: int | None = None):
+    """Move text (any notation) -> (move | None, status, note).
+
+    status is 'ok', 'illegal' or 'ambiguous'. `answered` is the square the move being replied to
+    landed on, so "recaptures" / "takes it" can be resolved without a square. note is set when the
+    move is clear but the text gets part of it wrong ("the bishop on e5 slides to f7" when the bishop
+    is on d5): (wrong_square, actual_square)."""
     t = text.strip().replace("…", "").lstrip(".").strip("*`!? ")
     legal = list(board.legal_moves)
     if not legal:
-        return None, "illegal"
+        return None, "illegal", None
     # castling
     m = CASTLE.search(t)
     if m:
         long = (m.group(2) and m.group(2).count("-") == 2) or (m.group(1) and m.group(1).lower().startswith("q"))
-        target = "O-O-O" if long else "O-O"
         try:
-            return board.parse_san(target), "ok"
+            return board.parse_san("O-O-O" if long else "O-O"), "ok", None
         except ValueError:
-            return None, "illegal"
-    # UCI
-    m = UCI.match(t)
+            return None, "illegal", None
+    # UCI ("c6c6" is not a move at all)
+    m = UCI.match(t.rstrip("+#"))
     if m:
-        move = chess.Move.from_uci(t)
-        return (move, "ok") if move in legal else (None, "illegal")
-    # SAN (with 0-0 and trailing + # annotations)
+        try:
+            move = chess.Move.from_uci(t.rstrip("+#"))
+        except ValueError:
+            return None, "illegal", None
+        return (move, "ok", None) if move in legal else (None, "illegal", None)
+    # SAN (python-chess ignores a missing/extra x, + or #: those are checked as separate facts)
     if re.fullmatch(r"[KQRBNP]?[a-h]?[1-8]?x?[a-h][1-8](=?[QRBN])?[+#]?|O-O(-O)?[+#]?", t):
         try:
-            return board.parse_san(t), "ok"
+            return board.parse_san(t), "ok", None
         except chess.AmbiguousMoveError:
-            return None, "ambiguous"
+            return None, "ambiguous", None
         except ValueError:
-            return None, "illegal"
+            return None, "illegal", None
     # long algebraic / arrows / prose: filter the legal moves by every constraint we can read
     candidates = legal
     two = TWO_SQUARES.search(t)
     squares = SQUARE.findall(t)
+    from_square = None
     if two:
-        frm, to = chess.parse_square(two.group(1)), chess.parse_square(two.group(2))
-        candidates = [mv for mv in candidates if mv.from_square == frm and mv.to_square == to]
+        from_square = chess.parse_square(two.group(1))
+        to = chess.parse_square(two.group(2))
+        candidates = [mv for mv in candidates if mv.to_square == to]
     elif squares:
         to = chess.parse_square(squares[-1])
         candidates = [mv for mv in candidates if mv.to_square == to]
         if len(squares) >= 2:
-            frm = chess.parse_square(squares[0])
-            candidates = [mv for mv in candidates if mv.from_square == frm]
+            from_square = chess.parse_square(squares[0])
+    elif answered is not None and RECAPTURE.search(t):  # "recaptures", "takes it", "takes back"
+        candidates = [mv for mv in candidates if mv.to_square == answered]
     letter = re.match(r"^([KQRBN])[a-h]", t)
     words = PIECE_WORD.findall(t)
     capture = bool(CAPTURE_VERB.search(t)) or bool(re.search(r"[a-h1-8]x[a-h]", t))
@@ -124,10 +153,30 @@ def resolve(board: chess.Board, text: str):
         kind = PIECES[promo.group(1).lower()] if promo.group(1) else "PNBRQK".index(promo.group(2).upper()) + 1
         candidates = [mv for mv in candidates if mv.promotion == kind]
     if not (two or squares or letter or words or promo or capture):
-        return None, "ambiguous"  # nothing to go on
+        return None, "ambiguous", None  # nothing to go on
+    # a check or mate said inside the move ("the queen checks", "delivers checkmate on e5") narrows it down
+    if len(candidates) > 1 and MATE_WORD.search(t):
+        mates = [mv for mv in candidates if _gives_mate(board, mv)]
+        candidates = mates or candidates
+    elif len(candidates) > 1 and CHECK_WORD.search(t):
+        checks = [mv for mv in candidates if board.gives_check(mv)]
+        candidates = checks or candidates
+    note = None
+    if from_square is not None:
+        exact = [mv for mv in candidates if mv.from_square == from_square]
+        if not exact and len(candidates) == 1:  # the right move from the wrong square: say so, but resolve it
+            note = (from_square, candidates[0].from_square)
+        else:
+            candidates = exact
     if len(candidates) == 1:
-        return candidates[0], "ok"
-    return None, "illegal" if not candidates else "ambiguous"
+        return candidates[0], "ok", note
+    return None, "illegal" if not candidates else "ambiguous", None
+
+
+def _gives_mate(board, move):
+    b = board.copy(stack=False)
+    b.push(move)
+    return b.is_checkmate()
 
 
 # ----------------------------------------------------------------- verify
@@ -150,12 +199,70 @@ def _piece_square(text: str, mention, mentions):
     return None
 
 
+def _line_squares(text: str, kind: str) -> list:
+    """The squares of a FILE / RANK / DIAGONAL mention ("c-file", "7th rank", "a1-h8")."""
+    t = text.lower()
+    if kind == "FILE":
+        f = t.strip()[0]
+        return [chess.square(chess.FILE_NAMES.index(f), r) for r in range(8)] if f in chess.FILE_NAMES else []
+    if kind == "RANK":
+        digit = re.search(r"[1-8]", t)
+        words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"]
+        rank = int(digit.group()) if digit else next((i + 1 for i, w in enumerate(words) if w in t), None)
+        return [chess.square(f, rank - 1) for f in range(8)] if rank else []
+    ends = re.findall(r"[a-h][1-8]", t)
+    if len(ends) != 2:
+        return []
+    a, b = (chess.parse_square(x) for x in ends)
+    if abs(chess.square_file(a) - chess.square_file(b)) != abs(chess.square_rank(a) - chess.square_rank(b)):
+        return []  # not a diagonal
+    return list(chess.SquareSet.between(a, b)) + [a, b]
+
+
+def _piece_line(text: str, mention, mentions):
+    """'bishop sits on the a4-e8 diagonal', 'a rook on the e-file' -> the line mention after the piece."""
+    for m in mentions:
+        if m[2] in ("FILE", "RANK", "DIAGONAL") and m[0] >= mention[1] and \
+                re.fullmatch(r"\s*(?:\w+\s+){0,2}(?:on|along|down|up)\s+the\s*", text[mention[1]:m[0]]):
+            return m
+    return None
+
+
+def _moved_from(last_move, square, board, kind=None):
+    """The piece that just moved, named by the square it came from ("Rxh7 ... the rook on g7 covers h8"):
+    its new square, or None."""
+    if last_move is None or last_move[3] is None or square is None or last_move[3].from_square != square:
+        return None
+    to = last_move[3].to_square
+    return to if kind is None or board.piece_type_at(to) == kind else None
+
+
 def _find_piece(board, kind, color, square=None):
     if square is not None:
         return square
     squares = [sq for sq in chess.SQUARES if board.piece_type_at(sq) == kind
                and (color is None or board.color_at(sq) == color)]
     return squares[0] if len(squares) == 1 else None
+
+
+def _on_line(board, square, text, kind) -> bool:
+    """Is a piece that moves along this line standing on it? ("the rook controls the e-file")"""
+    piece = board.piece_type_at(square)
+    t = text.lower()
+    if kind == "FILE":
+        f = t.strip()[0]
+        return piece in (chess.ROOK, chess.QUEEN) and chess.FILE_NAMES[chess.square_file(square)] == f
+    if kind == "RANK":
+        digit = re.search(r"[1-8]", t)
+        words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"]
+        rank = int(digit.group()) if digit else next((i + 1 for i, w in enumerate(words) if w in t), None)
+        if rank is None:
+            return False
+        return piece in (chess.ROOK, chess.QUEEN) and chess.square_rank(square) + 1 == rank
+    ends = re.findall(r"[a-h][1-8]", t)
+    if len(ends) != 2 or piece not in (chess.BISHOP, chess.QUEEN):
+        return False
+    return square in _line_squares(text, "DIAGONAL")
 
 
 def _king_moves(board: chess.Board, color) -> set:
@@ -167,33 +274,42 @@ def _king_moves(board: chess.Board, color) -> set:
     return {mv.to_square for mv in b.legal_moves if mv.from_square == king}
 
 
-def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict:
+def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: str | None = None) -> dict:
+    """best: the puzzle's solution move (UCI), if known. Without it, EVAL claims are unverifiable."""
     root = chess.Board(fen)
+    defender = not root.turn  # the side the puzzle is played against
     mentions = sorted(tagged["mentions"], key=lambda m: m[0])
     claims = sorted(tagged.get("claims") or [], key=lambda c: c[0])
     facts, moves = [], []  # moves: (start, end, before, move, after, stance)
 
+    state = {"fallback": False}  # set while checking in the position before an unplayable move
+
     def fact(kind, span, verdict, detail=""):
         facts.append({"kind": kind, "start": span[0], "end": span[1], "text": text[span[0]:span[1]],
-                      "verdict": verdict, "detail": detail})
+                      "verdict": verdict, "detail": detail + (FALLBACK if state["fallback"] else ""),
+                      "fallback": state["fallback"]})
 
     # 1. replay the lines
-    prev = None  # (before, after) of the previous move
+    prev = None  # (before, after, move, answered_square) of the previous move
     for m in mentions:
         if m[2] != "MOVE":
             continue
         line = m[3] if prev else "NEW"
         before = root if line == "NEW" else (prev[1] if line == "NEXT" else prev[0])
-        move, status, after = None, "unknown position", None
+        # the square of the move this one answers: "recaptures" happens there
+        answered = None if line == "NEW" else (prev[2].to_square if line == "NEXT" and prev[2] else prev[3])
+        move, status, after, note = None, "unknown position", None, None
         if before is not None:
-            move, status = resolve(before, text[m[0]:m[1]])
+            move, status, note = resolve_move(before, text[m[0]:m[1]], answered)
             if move is not None:
                 after = before.copy(stack=False)
                 after.push(move)
         moves.append((m[0], m[1], before, move, after, m[4]))
-        prev = (before, after)
+        prev = (before, after, move, answered)
         if status == "ok":
             fact("legal_move", m, True, move.uci())
+            if note:
+                fact("placement", m, False, f"not on {chess.square_name(note[0])}: the piece is on {chess.square_name(note[1])}")
             notation = text[m[0]:m[1]]
             if notation.rstrip("!?").endswith("#"):
                 fact("mate", m, after.is_checkmate(), "# in notation")
@@ -208,46 +324,95 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
         else:
             fact("legal_move", m, False if status == "illegal" else None, status)
 
+    # the reflection's conclusion: the last chosen move that can be played from the puzzle position
+    # (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
+    chosen_all = [mv for mv in moves if mv[5] == "CHOSEN" and mv[2] is root]
+    chosen = next((mv for mv in reversed(chosen_all) if mv[3] is not None), chosen_all[-1] if chosen_all else None)
+
     def frame_board(span, frame):
+        """(board, last move, fallback). After a move that can't be played (hallucinated, or a reply to
+        one), the claim is checked in the last real position before it, and fallback says so."""
         if frame == "NOW":
-            return root, None
+            return root, None, False
         earlier = [mv for mv in moves if mv[1] <= span[0]]
         if not earlier:
-            return root, None
-        return earlier[-1][4], earlier[-1]
+            return root, None, False
+        last = earlier[-1]
+        if last[4] is not None:
+            return last[4], last, False
+        for mv in reversed(earlier):  # walk back to a position that exists
+            if mv[4] is not None and mv[1] <= last[0]:
+                return mv[4], mv, True
+        return root, None, True
 
-    # 2. piece placements ("queen on h7")
+    # 2. piece placements ("queen on h7", "the g2 pawn", "the bishop on the a4-e8 diagonal")
     for m in mentions:
         if m[2] != "PIECE":
             continue
         square = _piece_square(text, m, mentions)
+        sq_mention = next((s for s in mentions if s[2] == "SQUARE" and s[0] >= m[1]
+                           and re.fullmatch(r"\s*(on|at|from|in)\s*", text[m[1]:s[0]])), None)
+        if square is None:  # "the g2 pawn": the square written before the piece
+            sq_mention = next((s for s in mentions if s[2] == "SQUARE" and s[1] <= m[0]
+                               and re.fullmatch(r"\s*", text[s[1]:m[0]])), None)
+            square = square_of(text[sq_mention[0]:sq_mention[1]]) if sq_mention else None
+        span = (min(m[0], sq_mention[0]), max(m[1], sq_mention[1])) if square is not None and sq_mention else m
         if square is None:
+            line = _piece_line(text, m, mentions)
+            word = PIECE_WORD.search(text[m[0]:m[1]])
+            if line is None or word is None:
+                continue
+            board, last, fallback = frame_board(m, m[5])
+            squares = _line_squares(text[line[0]:line[1]], line[2])
+            kind, color = PIECES[word.group(1).lower()], color_of(text[m[0]:m[1]])
+            found = [sq for sq in squares if board.piece_type_at(sq) == kind and (color is None or board.color_at(sq) == color)]
+            state["fallback"] = fallback
+            fact("placement", (m[0], line[1]), bool(found), (f"on {chess.square_name(found[0])}" if found else "none") +
+                 f" on the {text[line[0]:line[1]]}")
+            state["fallback"] = False
             continue
-        board, _ = frame_board(m, m[5])
+        board, last, fallback = frame_board(m, m[5])
         word = PIECE_WORD.search(text[m[0]:m[1]])
-        if board is None or word is None:
-            fact("placement", m, None, "unknown position")
+        if word is None:
             continue
         kind, color = PIECES[word.group(1).lower()], color_of(text[m[0]:m[1]])
-        ok = board.piece_type_at(square) == kind and (color is None or board.color_at(square) == color)
-        fact("placement", (m[0], m[1] + len(text[m[1]:]) - len(text[m[1]:].lstrip()) + 5), ok,
-             f"{chess.square_name(square)}: {board.piece_at(square) or 'empty'}")
+        moved = _moved_from(last, square, board, kind)
+        state["fallback"] = fallback
+        if moved is not None:  # the piece that just moved, called by its old square: not a false placement
+            fact("placement", span, True, f"{chess.square_name(square)}: the {chess.piece_name(kind)} that just moved there")
+        else:
+            ok = board.piece_type_at(square) == kind and (color is None or board.color_at(square) == color)
+            fact("placement", span, ok, f"{chess.square_name(square)}: {board.piece_at(square) or 'empty'}")
+        state["fallback"] = False
 
     # 3. claims
     for c in claims:
         start, end, kind, frame = c[0], c[1], c[2], (c[3] if len(c) > 3 else None)
-        board, last_move = frame_board(c, frame)
-        if board is None:
-            fact(kind.lower(), c, None, "unknown position")
-            continue
+        board, last_move, fallback = frame_board(c, frame)
+        state["fallback"] = fallback
         claim_text = text[start:end]
         negated = bool(NEGATION.search(claim_text))
         lo, hi = _clause_bounds(text, start)
+        # objects stop where the next claim's subject starts ("covers g1 and h2, and the queen covers g3")
+        passive = bool(re.match(r"\s*by\b", text[end:]))
+        later = next((x for x in claims if x[0] >= end and x[0] < hi), None)
+        if later is not None and not passive:
+            next_subject = next((m for m in reversed(mentions) if end <= m[0] < later[0] and m[2] in ("MOVE", "PIECE")), None)
+            if next_subject is not None:
+                hi = next_subject[0]
         subject = next((m for m in reversed(mentions) if lo <= m[0] < start and m[2] in ("MOVE", "PIECE")), None)
-        objects = [m for m in mentions if end <= m[0] < hi and m[2] in ("SQUARE", "PIECE")]
+        objects = [m for m in mentions if end <= m[0] < hi and m[2] in ("SQUARE", "PIECE", "FILE", "RANK", "DIAGONAL")]
+        if passive:  # "g1 is covered by the rook on g2": the agent is the subject, the thing before it the object
+            agent = next((m for m in mentions if end <= m[0] < (later[0] if later else hi) and m[2] == "PIECE"), None)
+            if agent is not None:
+                covered = next((m for m in reversed(mentions) if lo <= m[0] < start and m[2] in ("SQUARE", "PIECE")), None)
+                objects = [covered] if covered is not None else []
+                subject = agent
 
         if kind in ("CHECK", "MATE"):
             value = board.is_check() if kind == "CHECK" else board.is_checkmate()
+            # "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
+            negated = bool(NEGATED_END.search(claim_text))
             fact(kind.lower(), c, value != negated)
         elif kind == "WINS":
             mv = next((x for x in moves if subject and x[0] == subject[0]), last_move)
@@ -272,16 +437,23 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 board = mv[4] if mv and mv[4] else board
             else:
                 word = PIECE_WORD.search(text[subject[0]:subject[1]])
-                src = _find_piece(board, PIECES[word.group(1).lower()], color_of(text[subject[0]:subject[1]]),
-                                  _piece_square(text, subject, mentions)) if word else None
+                named = _piece_square(text, subject, mentions)
+                src = _moved_from(last_move, named, board, PIECES[word.group(1).lower()] if word else None)
+                if src is None:
+                    src = _find_piece(board, PIECES[word.group(1).lower()], color_of(text[subject[0]:subject[1]]),
+                                      named) if word else None
             if src is None or board.piece_at(src) is None:
-                fact("attacks", c, None, "subject not found on the board")
+                named = _piece_square(text, subject, mentions) if subject[2] == "PIECE" else None
+                if named is not None:  # "the rook on c7 covers ..." with no rook on c7: false, not unknowable
+                    fact("attacks", c, False, f"no such piece on {chess.square_name(named)}")
+                else:
+                    fact("attacks", c, None, "subject not found on the board")
                 continue
             if re.search(r"defend|protect|guard", claim_text, re.I) and re.search(r"\bun|not|no\b", claim_text, re.I) and not objects:
                 ok = not board.attackers(board.color_at(src), src)  # "is undefended"
                 fact("attacks", c, ok, "no defenders" if ok else "defended")
                 continue
-            if re.search(r"pin", claim_text, re.I) and not objects:
+            if re.search(r"pin", claim_text, re.I):  # "pinned (to the king by the knight)": objects only say by what
                 fact("attacks", c, board.is_pinned(board.color_at(src), src) != negated, "pinned")
                 continue
             targets = []
@@ -295,13 +467,55 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                                      _piece_square(text, o, mentions)) if w else None
                     if sq is not None:
                         targets.append(sq)
+            lines = [o for o in objects if o[2] in ("FILE", "RANK", "DIAGONAL")]
+            if not targets and lines:  # "controls the e-file": a line piece standing on that line
+                ok = all(_on_line(board, src, text[o[0]:o[1]], o[2]) for o in lines)
+                fact("attacks", c, ok != negated, ("on " if ok else "not on ") + ", ".join(text[o[0]:o[1]] for o in lines))
+                continue
+            if not targets and ANAPHORA.match(text[end:]):  # "covers that square / it / both": the square(s) named before
+                sentence_start = max([m.end() for m in SENTENCE_END.finditer(text) if m.end() <= start] or [0])
+                earlier = [square_of(text[m[0]:m[1]]) for m in mentions
+                           if m[2] == "SQUARE" and sentence_start <= m[0] < subject[0]]
+                earlier = [sq for sq in earlier if sq is not None and sq != src]
+                take = 2 if re.match(r"\s*(both|them|those|these)", text[end:], re.I) else 1
+                targets = earlier[-take:]
+            targets = list(dict.fromkeys(targets))
             if not targets:
                 fact("attacks", c, None, "no target")
                 continue
-            hit = [board.is_attacked_by(board.color_at(src), t) and src in board.attackers(board.color_at(src), t)
-                   for t in targets]
+            own = board.color_at(src)
+            hit = [src in board.attackers(own, t) for t in targets]
+            if REACH.search(claim_text):  # "cannot reach e7": a square its own piece stands on can't be reached
+                hit = [h and board.color_at(t) != own for h, t in zip(hit, targets)]
             fact("attacks", c, (all(hit) if not negated else not any(hit)),
                  ", ".join(f"{chess.square_name(t)}:{'yes' if h else 'no'}" for t, h in zip(targets, hit)))
+        elif kind == "EVAL":
+            state["fallback"] = False  # an evaluation is about a move, not a position
+            if best is None:
+                fact("eval", c, None, "no solution move given")
+                continue
+            positive = not NEGATIVE_EVAL.search(claim_text)
+            side = re.search(r"\b(white|black)\b[\w\s']{0,12}$", text[max(0, start - 20):start], re.I)
+            if side:  # "Black is lost", "White is winning": about a side, not a move
+                named_attacker = (side.group(1).lower() == "white") == (root.turn == chess.WHITE)
+                if re.search(r"lost|bust|hopeless|done|can'?t hold|cannot hold|resign", claim_text, re.I):
+                    positive = not named_attacker
+                    negated = bool(re.search(r"\bnot\b|n't (?:lost|bust|hopeless|done)", claim_text, re.I))
+                elif re.search(r"win", claim_text, re.I):
+                    positive = named_attacker
+            if negated:
+                positive = not positive
+            s_lo = max([m.end() for m in SENTENCE_END.finditer(text) if m.end() <= start] or [0])
+            s_hi = min([m.start() for m in SENTENCE_END.finditer(text) if m.start() >= end] or [len(text)])
+            near = [mv for mv in moves if s_lo <= mv[0] < s_hi]
+            before_claim = [mv for mv in near if mv[0] < start]
+            target = before_claim[-1] if before_claim else (near[0] if near else chosen)
+            if target is None or target[3] is None:
+                fact("eval", c, None, "no playable move to evaluate")
+                continue
+            is_best = target[3].uci() == best
+            fact("eval", c, is_best == positive,
+                 f"{target[3].uci()} {'is' if is_best else 'is not'} the solution ({best})")
         elif kind == "FLIGHT":
             color = None
             if subject is not None and subject[2] == "PIECE":
@@ -310,7 +524,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 if color is None and sq is not None and board.piece_type_at(sq) == chess.KING:
                     color = board.color_at(sq)
             if color is None:
-                color = board.turn  # in the frame position, the side to move is the one being mated
+                color = defender  # a king with no colour is the one being attacked
             if board.king(color) is None:
                 fact("flight", c, None, "no king")
                 continue
@@ -324,7 +538,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None) -> dict
                 ok = (not reachable) if restrictive else bool(reachable)
             fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none"))
 
-    chosen = next((mv for mv in moves if mv[5] == "CHOSEN" and mv[2] is root), None)
+    state["fallback"] = False
     chosen_uci = chosen[3].uci() if chosen and chosen[3] else None
     summary = {}
     for f in facts:

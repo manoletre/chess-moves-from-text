@@ -68,7 +68,8 @@ def synthetic():
             raise SystemExit(f"synthetic {row['id']}: {problems}")
         category = row.get("category", "other")
         seen[category] += 1
-        split = "test" if seen[category] % 4 == 0 else "train"  # a quarter of every category is held out
+        # a quarter of every category is held out; templated text is never tested here (data/probe/ is its test)
+        split = "train" if category == "templated" else "test" if seen[category] % 4 == 0 else "train"
         out[split].append(from_markup(row["marked"], group="synthetic", source=f"synthetic:{category}",
                                       id=row["id"], fen=row.get("fen")))
     return out
