@@ -7,7 +7,8 @@ model, and reports every hit that no tagged claim or move covers.
 
     from chess_tagger.audit import audit
     a = audit(text, tagger.predict([text])[0], verify_report)
-    a["untagged"]      # [{"start", "end", "text", "family"}]   lexicon hits outside every tagged span
+    a["untagged"]      # [{"start", "end", "text", "family"}]   lexicon hits outside every tagged span, in a
+                       # family (mate / eval / check) the text has no tagged claim of at all
     a["flags"]         # {"untagged_mate", "untagged_eval", "no_checkable_facts", ...}: bools
     a["untagged_share"]  # untagged hits / (untagged hits + tagged claims), 0 when there are none
 
@@ -22,7 +23,8 @@ import re
 # family -> patterns. Word boundaries are added around each pattern.
 LEXICON = {
     "mate": [
-        r"check-?mat\w*", r"mat(?:e|es|ed)(?! net)", r"#", r"game over", r"it'?s over", r"is over", r"the end",
+        # "mate" the noun ("support the mate", "a mate in two") is a back-reference, not a new claim
+        r"check-?mat\w*", r"(?<!\bthe )(?<!\ba )(?<!\bthis )(?<!\bthat )mat(?:e|es|ed)(?! net)", r"#", r"game over", r"it'?s over", r"is over", r"the end",
         r"curtains", r"resign\w*", r"1-0", r"0-1", r"(?:king|monarch) (?:is|will be) (?:dead|done|finished|caught)",
         r"(?:king|monarch) falls", r"finish(?:es|ed)? (?:it|him|the game|things off|off)", r"ends? (?:it|the game|things)",
         r"wraps? (?:it|things|the game) up", r"wraps? up", r"seals? (?:it|the game|his fate|the king'?s fate)",
@@ -31,7 +33,8 @@ LEXICON = {
         r"lights out", r"knockout", r"killer (?:blow|move)", r"final blow", r"(?:the )?king hunt",
     ],
     "eval": [
-        r"decisive\w*", r"crushing", r"winning", r"wins outright", r"wins (?:on the spot|immediately|by force)",
+        # bare "winning" is mostly material ("winning the initiative / the exchange"): only "winning move/idea/..." count
+        r"decisive\w*", r"crushing", r"wins outright", r"wins (?:on the spot|immediately|by force)",
         r"unstoppable", r"lethal", r"devastating", r"deadly", r"brutal", r"overwhelming",
         r"(?:the )?(?:best|strongest|only|winning|correct|right) (?:move|continuation|choice|idea|answer|try)",
         r"forced (?:win|mate|line)", r"completely winning", r"totally winning", r"game-?winning",
@@ -65,6 +68,11 @@ def audit(text: str, tagged: dict, report: dict | None = None) -> dict:
     untagged = [h for h in lexicon_hits(text)
                 if not any(s < h["end"] and e > h["start"] for s, e in covered)]
     n_claims = len(tagged.get("claims") or [])
+    tagged_kinds = {c[2] for c in tagged.get("claims") or []}
+    # a family only counts as untagged when the text has no tagged claim of that kind at all: once a
+    # mate claim is checked, later back-references to "the mate" add nothing to verify
+    family_kind = {"mate": "MATE", "eval": "EVAL", "check": "CHECK"}
+    untagged = [h for h in untagged if family_kind[h["family"]] not in tagged_kinds]
     flags = {
         "untagged_mate": any(h["family"] == "mate" for h in untagged),
         "untagged_eval": any(h["family"] == "eval" for h in untagged),
