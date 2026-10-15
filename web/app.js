@@ -1,7 +1,7 @@
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.min.mjs";
 import { Chess } from "./vendor/chess.js";
 import { loadTagger } from "./tagger.js";
-import { verify } from "./verify.js";
+import { positionBefore, verify } from "./verify.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
 const MODEL_CACHE = "chess-move-tagger-v3";
@@ -312,10 +312,11 @@ function focusSpan(i) {
     litMarks(f.related ?? []);
     const color = showCheck ? `var(--v-${verdictKey(f.verdict)})` : "var(--FILE)";
     drawPosition(new Chess(f.frameFen ?? fen), { lit: f.targets ?? [], color, lastMove: f.lastMove });
-  } else if (m.kind === "loc") {
-    drawPosition(new Chess(fen), { lit: squaresFor(m), color: `var(--${m.type})` });
   } else {
-    drawPosition(new Chess(fen), { lit: m.type === "SQUARE" ? squaresFor(m) : [], color: "var(--SQUARE)" });
+    // a location (or a piece) is shown on the position the text is at: after the last move before it
+    const at = positionBefore(report, fen, m.start);
+    const lit = m.kind === "loc" || m.type === "SQUARE" ? squaresFor(m) : [];
+    drawPosition(new Chess(at.fen), { lit, color: `var(--${m.type ?? "SQUARE"})`, lastMove: at.lastMove });
   }
   editor.querySelectorAll(".mk").forEach((el) => {
     el.classList.toggle("is-lit", lit.has(Number(el.dataset.i)));

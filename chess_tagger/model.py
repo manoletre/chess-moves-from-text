@@ -16,6 +16,7 @@ scripts/train.py trains it; keep the decoding rules here and in web/tagger.js in
 """
 
 import json
+import re
 from pathlib import Path
 
 import torch
@@ -93,7 +94,7 @@ def bio_spans(text: str, offsets: list, labels: list[str]) -> list:
     return cleaned
 
 
-def decode(text: str, offsets: list, logits: torch.Tensor) -> dict:
+def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool = True) -> dict:
     """Token logits [tokens, NUM_OUTPUTS] ->
     {"mentions": [[s, e, type, line, stance, frame]], "claims": [[s, e, type, frame]]} (None where n/a)."""
     sl = head_slices()
@@ -112,7 +113,7 @@ def decode(text: str, offsets: list, logits: torch.Tensor) -> dict:
             frame = attribute("frame", FRAMES, t0, t1)
         mentions.append([start, end, kind, line, stance, frame])
     first_move = next((m for m in mentions if m[2] == "MOVE"), None)
-    if first_move is not None:
+    if first_move is not None and first_move_new:
         first_move[3] = "NEW"  # nothing to continue yet
     claims = [[s, e, k, attribute("frame", FRAMES, t0, t1)]
               for s, e, k, t0, t1 in bio_spans(text, offsets, [HEADS["claim"][i] for i in claim_ids])]
@@ -152,8 +153,35 @@ class ChessTagger:
                     params[key].copy_(f.get_tensor(key))
         return model
 
+    def chunks(self, text: str) -> list[tuple[int, str]]:
+        """Split a text that is too long for the model at sentence ends: [(offset, piece), ...]."""
+        limit = self.max_length - 16
+        if len(self.tokenizer(text)["input_ids"]) <= limit:
+            return [(0, text)]
+        pieces, start = [], 0
+        ends = [m.end() for m in re.finditer(r"[.!?\n]+\s*", text)] + [len(text)]
+        current = 0
+        for end in ends:
+            if len(self.tokenizer(text[current:end])["input_ids"]) > limit and end > start and start > current:
+                pieces.append((current, text[current:start]))
+                current = start
+            start = end
+        pieces.append((current, text[current:]))
+        return pieces
+
     @torch.no_grad()
     def predict(self, texts: list[str], batch_size: int = 16) -> list[dict]:
+        """Spans for each text. Texts longer than the model's window are tagged sentence-chunk by chunk."""
+        jobs = [(i, offset, piece) for i, text in enumerate(texts) for offset, piece in self.chunks(text)]
+        parts = self._predict([piece for _, _, piece in jobs], batch_size, [offset == 0 for _, offset, _ in jobs])
+        results = [{"mentions": [], "claims": []} for _ in texts]
+        for (i, offset, _), part in zip(jobs, parts):
+            results[i]["mentions"] += [[s + offset, e + offset, *rest] for s, e, *rest in part["mentions"]]
+            results[i]["claims"] += [[s + offset, e + offset, *rest] for s, e, *rest in part["claims"]]
+        return results
+
+    @torch.no_grad()
+    def _predict(self, texts: list[str], batch_size: int, first_move_new: list[bool]) -> list[dict]:
         results = []
         for i in range(0, len(texts), batch_size):
             chunk = texts[i:i + batch_size]
@@ -162,14 +190,14 @@ class ChessTagger:
             logits = self.model(enc["input_ids"].to(self.device), enc["attention_mask"].to(self.device)).float().cpu()
             for j, (text, offsets) in enumerate(zip(chunk, enc["offset_mapping"].tolist())):
                 n = int(enc["attention_mask"][j].sum())
-                results.append(decode(text, offsets[:n], logits[j, :n]))
+                results.append(decode(text, offsets[:n], logits[j, :n], first_move_new[i + j]))
         return results
 
     def tag(self, text: str) -> dict:
         """Mentions and claims, plus the views the demo app uses: move series and board highlights."""
         n_tokens = len(self.tokenizer(text)["input_ids"])
         predicted = self.predict([text])[0]
-        return {**group(text, predicted), "truncated": n_tokens > self.max_length}
+        return {**group(text, predicted), "chunked": n_tokens > self.max_length - 16}
 
 
 def group(text: str, predicted: dict) -> dict:
