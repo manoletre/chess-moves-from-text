@@ -4,9 +4,10 @@
     python scripts/export_onnx.py                  # chess-move-tagger/ -> web/model/
 
 The graph takes one text at a time (input_ids of shape [1, n], no padding) and
-returns logits of shape [1, n, 13]. Weights are quantized block-wise to 4 bits
-(blocks of 32, embeddings included): 145 MB instead of 920 MB, test F1 0.953
-instead of 0.958. Plain per-tensor int8 was both bigger (231 MB) and worse (0.944).
+returns logits of shape [1, n, 32]: all five heads side by side, in the order of
+"heads" in tagger_config.json (web/tagger.js splits them). Weights are quantized
+block-wise to 4 bits (blocks of 32, embeddings included): ~145 MB instead of 920 MB.
+Plain per-tensor int8 was both bigger (231 MB) and worse (v2).
 
 The model is written in 50 MB parts (Vercel's free plan rejects files over 100 MB);
 tagger_config.json lists them and the page joins them back together.

@@ -33,8 +33,8 @@ of a regex. Vague references the app couldn't resolve ("the long diagonal",
 "the back rank") are left unlabelled.
 
 Usage:
-    python data/generate_dataset.py            # writes data/{train,val,test}.jsonl
-    python data/generate_dataset.py --train 2000
+    python data/commentary/generate_dataset.py            # writes data/commentary/{train,val,test}.jsonl
+    python data/commentary/generate_dataset.py --train 2000
 
 v2 adds SERIES_TEMPLATES: lines that are interrupted by prose and picked up
 again later ("3...f6 allows 4.Bc4. The best answer would then be 4...exd4"),

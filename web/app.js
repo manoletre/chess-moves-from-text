@@ -3,7 +3,7 @@ import { Chess } from "./vendor/chess.js";
 import { loadTagger } from "./tagger.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
-const MODEL_CACHE = "chess-move-tagger-v2";
+const MODEL_CACHE = "chess-move-tagger-v3";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 
 const FILES = "abcdefgh";
@@ -89,19 +89,62 @@ function squaresFor(span) {
   return [];
 }
 
-// Replay moves from the current position. Stops at the first move that isn't legal there.
+// Any notation -> a played move, or null. SAN/UCI/long algebraic go through chess.js; prose
+// ("the queen slides to h8", "capture the pawn on d7") is matched against the legal moves,
+// like chess_tagger/verify.py does (a smaller version of it).
+const PIECE_LETTER = { pawn: "p", knight: "n", bishop: "b", rook: "r", queen: "q", king: "k" };
+function playMove(game, text) {
+  const t = text.trim().replace(/^[.…]+/, "").replace(/[!?*`]+$/, "").replace(/^0-0(-0)?/, (m) => m.replaceAll("0", "O"));
+  try { return game.move(t); } catch { /* not SAN: try prose */ }
+  let moves = game.moves({ verbose: true });
+  const castle = t.match(/castl\w*\s*(short|long|kingside|queenside)?/i);
+  if (castle) moves = moves.filter((m) => (/long|queen/i.test(castle[1] ?? "") ? /^O-O-O/ : /^O-O(?!-O)/).test(m.san));
+  const two = t.match(/([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])/);
+  const squares = t.match(/\b[a-h][1-8]\b/g) ?? [];
+  if (two) moves = moves.filter((m) => m.from === two[1] && m.to === two[2]);
+  else if (squares.length) {
+    moves = moves.filter((m) => m.to === squares.at(-1));
+    if (squares.length > 1) moves = moves.filter((m) => m.from === squares[0]);
+  }
+  const capture = /captur|takes?\b|taking|recaptur|grab|snap/i.test(t);
+  const promo = t.match(/promot\w*\s+(?:to\s+)?(?:an?\s+)?(queen|rook|bishop|knight)/i);
+  const noun = t.match(/\b(pawn|knight|bishop|rook|queen|king)s?\b/i);
+  if (noun && !(promo && promo.index < noun.index)) {
+    const letter = PIECE_LETTER[noun[1].toLowerCase()];
+    if (/captur|takes?\b|taking|recaptur|grab|snap/i.test(t.slice(0, noun.index))) moves = moves.filter((m) => m.captured === letter);
+    else moves = moves.filter((m) => m.piece === letter);
+  }
+  if (capture) moves = moves.filter((m) => m.captured);
+  if (promo) moves = moves.filter((m) => m.promotion === PIECE_LETTER[promo[1].toLowerCase()]);
+  if (!(castle || two || squares.length || noun || promo || capture) || moves.length !== 1) return null;
+  return game.move(moves[0].san);
+}
+
+// Replay moves from the current position. Stops at the first move that can't be played there.
 function replay(moves) {
   const game = new Chess(fen);
   const played = [];
   for (const move of moves) {
-    try {
-      played.push(game.move(move.text.replace(/^0-0(-0)?/, (m) => m.replaceAll("0", "O"))));
-    } catch {
-      return { game, played, illegal: move };
-    }
+    const done = playMove(game, move.text);
+    if (!done) return { game, played, illegal: move };
+    played.push(done);
   }
   return { game, played, illegal: null };
 }
+
+// The board a piece or claim talks about: its frame. NOW = the current position,
+// AFTER = after the last move mentioned before it (replaying that move's series).
+function frameBoard(span) {
+  if (span.frame !== "AFTER") return { game: new Chess(fen), played: [] };
+  const before = result.spans.filter((s) => s.type === "MOVE" && s.end <= span.start).at(-1);
+  if (!before) return { game: new Chess(fen), played: [] };
+  return replay(result.series[before.series].slice(0, before.index + 1));
+}
+
+const DESCRIBE = {
+  MOVE: (s) => `move · ${s.line.toLowerCase()} · ${s.stance.toLowerCase()}`,
+  PIECE: (s) => `piece · ${s.frame.toLowerCase()}`,
+};
 
 // ------------------------------------------------ the editable text
 // One contenteditable box: the user types in it, and the model's marks are drawn in it.
@@ -160,8 +203,10 @@ function render(text, data) {
   data.spans.forEach((span, i) => {
     nodes.push(document.createTextNode(text.slice(cursor, span.start)));
     const mark = document.createElement("mark");
-    mark.className = `span span--${span.type}${illegal.has(span) ? " span--illegal" : ""}`;
+    mark.className = `span span--${span.kind} span--${span.type}${illegal.has(span) ? " span--illegal" : ""}`
+      + (span.stance ? ` span--${span.stance.toLowerCase()}` : "");
     mark.textContent = text.slice(span.start, span.end);
+    mark.title = DESCRIBE[span.type]?.(span) ?? (span.kind === "claim" ? `claim · ${span.type.toLowerCase()} · ${span.frame.toLowerCase()}` : span.type.toLowerCase());
     mark.dataset.i = i;
     nodes.push(mark);
     cursor = span.end;
@@ -177,13 +222,17 @@ function focusSpan(i) {
   editor.classList.add("has-focus");
   const lit = new Set();
 
-  if (span.type === "START" || span.type === "CONT") {
+  if (span.type === "MOVE") {
     const path = result.series[span.series].slice(0, span.index + 1);
     path.forEach((move) => lit.add(result.spans.indexOf(move)));
     const { game, played } = replay(path);
     const steps = {};
     played.forEach((move, k) => { steps[move.to] = k + 1; });
     drawPosition(game, { lastMove: played.at(-1), steps });
+  } else if (span.type === "PIECE" || span.kind === "claim") {
+    const { game, played } = frameBoard(span);
+    drawPosition(game, { lastMove: played.at(-1) });
+    lit.add(i);
   } else {
     drawPosition(new Chess(fen), { lit: squaresFor(span), color: `var(--${span.type})` });
     lit.add(i);
@@ -242,6 +291,7 @@ editor.addEventListener("input", (e) => {
   editor.classList.remove("has-focus");
   if (!readEditor().text.trim()) {
     fen = START_FEN; // an empty box starts over from the initial position
+    fenInput.value = "";
     exampleBar.querySelectorAll(".example").forEach((c) => c.classList.remove("is-active"));
     drawPosition(new Chess(fen));
   }
@@ -254,9 +304,26 @@ editor.addEventListener("input", (e) => {
 const examples = await (await fetch("examples.json")).json();
 const exampleBar = $("#examples");
 
+const fenInput = $("#fen");
+function setFen(value) {
+  try {
+    fen = new Chess(value.trim() || START_FEN).fen();
+    fenInput.removeAttribute("aria-invalid");
+  } catch {
+    fenInput.setAttribute("aria-invalid", "true");
+    return false;
+  }
+  if (result) render(readEditor().text, result);
+  else drawPosition(new Chess(fen));
+  return true;
+}
+fenInput.addEventListener("input", () => setFen(fenInput.value));
+
 function showExample(example, chip) {
   exampleBar.querySelectorAll(".example").forEach((c) => c.classList.toggle("is-active", c === chip));
   fen = example.fen;
+  fenInput.value = example.fen;
+  fenInput.removeAttribute("aria-invalid");
   result = null;
   editor.classList.add("is-fresh");
   editor.replaceChildren(example.text);

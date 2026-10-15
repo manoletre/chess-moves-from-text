@@ -1,7 +1,6 @@
-// The chess move & board-location tagger, running in the browser.
-// Mirrors chess_tagger/model.py: same tokenizer, same labels, same decoding rules.
+// The chess tagger (v3: moves, pieces, locations and claims), running in the browser.
+// Mirrors chess_tagger/model.py: same tokenizer, same heads, same decoding rules.
 
-const MOVE_TYPES = new Set(["START", "CONT"]);
 const TRIM = new Set(" \n\t.,;:!?*`()\"'"); // never part of a move or location (but + # = - are)
 
 // ------------------------------------------------------------ tokenizer
@@ -88,45 +87,102 @@ export class Tokenizer {
 }
 
 // --------------------------------------------------------------- decoding
+// The model has one output layer split into heads (tagger_config.json "heads", in order):
+// mention (BIO spans), line + stance (read on MOVE spans), frame (read on PIECE spans and claims),
+// claim (BIO spans). Mirrors chess_tagger/model.py.
 
-// One predicted label per token -> [[start, end, type], ...] character spans.
-export function decode(text, offsets, labelIds, labels) {
+function headSlices(heads) {
+  const out = {};
+  let offset = 0;
+  for (const [name, labels] of Object.entries(heads)) {
+    out[name] = { offset, labels };
+    offset += labels.length;
+  }
+  return { slices: out, width: offset };
+}
+
+// One BIO label per token -> [[start, end, type, firstToken, lastToken], ...].
+function bioSpans(text, offsets, labels) {
   const spans = [];
-  let insideSpan = false;
-  offsets.forEach(([start, end], i) => {
+  let inside = false;
+  offsets.forEach(([start, end], t) => {
     while (start < end && /\s/.test(text[start])) start++;
-    const label = labels[labelIds[i]];
-    if (start === end || label === "O") { insideSpan = false; return; }
+    const label = labels[t];
+    if (start === end || label === "O") { inside = false; return; }
     const [tag, kind] = label.split("-");
-    if (tag === "B" || !insideSpan) spans.push([start, end, kind]);
-    else spans[spans.length - 1][1] = end;
-    insideSpan = true;
+    const last = spans.at(-1);
+    const midWord = last && last[1] === start && start > 0 && /[\p{L}\p{N}]/u.test(text[start - 1]) && /[\p{L}\p{N}]/u.test(text[start]);
+    // a word is never split between two spans: the first token decides
+    if (midWord || (inside && tag === "I" && kind === last[2])) { last[1] = end; last[4] = t; }
+    else spans.push([start, end, kind, t, t]);
+    inside = true;
   });
   const cleaned = [];
-  for (let [start, end, kind] of spans) {
+  for (let [start, end, kind, t0, t1] of spans) {
     while (start < end && TRIM.has(text[start])) start++;
     while (end > start && TRIM.has(text[end - 1])) end--;
-    if (start < end) cleaned.push([start, end, kind]);
+    if (start < end) cleaned.push([start, end, kind, t0, t1]);
   }
   return cleaned;
 }
 
-// Spans plus the two views the app needs: move series and board highlights (same shape as ChessTagger.tag).
-export function group(text, spans) {
-  const out = [], series = [], highlights = [];
-  for (const [start, end, type] of spans) {
-    const item = { start, end, type, text: text.slice(start, end) };
-    if (MOVE_TYPES.has(type)) {
-      if (type === "START" || !series.length) series.push([]);
-      item.series = series.length - 1;
-      item.index = series.at(-1).length;
+// logits: Float32Array of [tokens x width] -> { mentions: [[s, e, type, line, stance, frame]], claims: [[s, e, type, frame]] }
+export function decode(text, offsets, logits, heads) {
+  const { slices, width } = headSlices(heads);
+  const at = (t, k) => logits[t * width + k];
+  const argmaxLabels = ({ offset, labels }) => offsets.map((_, t) => {
+    let best = 0;
+    for (let k = 1; k < labels.length; k++) if (at(t, offset + k) > at(t, offset + best)) best = k;
+    return labels[best];
+  });
+  // average the head's log-probabilities over the span's tokens
+  const attribute = ({ offset, labels }, t0, t1) => {
+    const sums = new Array(labels.length).fill(0);
+    for (let t = t0; t <= t1; t++) {
+      const row = labels.map((_, k) => at(t, offset + k));
+      const max = Math.max(...row);
+      const logZ = max + Math.log(row.reduce((acc, v) => acc + Math.exp(v - max), 0));
+      row.forEach((v, k) => { sums[k] += v - logZ; });
+    }
+    return labels[sums.indexOf(Math.max(...sums))];
+  };
+  const mentions = bioSpans(text, offsets, argmaxLabels(slices.mention)).map(([s, e, kind, t0, t1]) => [
+    s, e, kind,
+    kind === "MOVE" ? attribute(slices.line, t0, t1) : null,
+    kind === "MOVE" ? attribute(slices.stance, t0, t1) : null,
+    kind === "PIECE" ? attribute(slices.frame, t0, t1) : null,
+  ]);
+  const firstMove = mentions.find((m) => m[2] === "MOVE");
+  if (firstMove) firstMove[3] = "NEW"; // nothing to continue yet
+  const claims = bioSpans(text, offsets, argmaxLabels(slices.claim))
+    .map(([s, e, kind, t0, t1]) => [s, e, kind, attribute(slices.frame, t0, t1)]);
+  return { mentions, claims };
+}
+
+// The views the app needs (same shape as chess_tagger.model.group): every span in text order,
+// move series (NEW starts one, NEXT extends it, ALT replaces its last move) and board highlights.
+export function group(text, { mentions, claims }) {
+  const series = [], highlights = [], spans = [];
+  for (const [start, end, type, line, stance, frame] of mentions) {
+    const item = { start, end, type, kind: "mention", text: text.slice(start, end) };
+    if (type === "MOVE") {
+      if (line === "NEW" || !series.length) series.push([]);
+      else if (line === "ALT" && series.at(-1).length) series.push(series.at(-1).slice(0, -1));
+      Object.assign(item, { line, stance, series: series.length - 1, index: series.at(-1).length });
       series.at(-1).push(item);
     } else {
+      if (type === "PIECE") item.frame = frame;
       highlights.push(item);
     }
-    out.push(item);
+    spans.push(item);
   }
-  return { spans: out, series, highlights };
+  for (const [start, end, type, frame] of claims) {
+    spans.push({ start, end, type, frame, kind: "claim", text: text.slice(start, end) });
+  }
+  spans.sort((a, b) => a.start - b.start || a.end - b.end);
+  // the heads are independent, so a claim can overlap a mention: keep the first
+  const kept = spans.filter((s, i) => !spans.slice(0, i).some((o) => o.end > s.start && o.start < s.end));
+  return { spans: kept, series, highlights };
 }
 
 // -------------------------------------------------------------- the model
@@ -171,20 +227,11 @@ export async function loadTagger(ort, baseUrl, cacheName, onProgress) {
 
   const tokenizer = new Tokenizer(tokenizerJson);
   const session = await ort.InferenceSession.create(modelBytes, { executionProviders: ["wasm"] });
-  const labels = config.labels;
-
   return async function tag(text) {
     const { ids, offsets, truncated } = tokenizer.encode(text, config.max_length);
-    if (ids.length < 2) return { ...group(text, []), truncated };
+    if (ids.length < 2) return { ...group(text, { mentions: [], claims: [] }), truncated };
     const input = new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]);
     const { logits } = await session.run({ input_ids: input });
-    const n = labels.length;
-    const labelIds = [];
-    for (let t = 0; t < ids.length; t++) {
-      let best = 0;
-      for (let k = 1; k < n; k++) if (logits.data[t * n + k] > logits.data[t * n + best]) best = k;
-      labelIds.push(best);
-    }
-    return { ...group(text, decode(text, offsets, labelIds, labels)), truncated };
+    return { ...group(text, decode(text, offsets, logits.data, config.heads)), truncated };
   };
 }

@@ -13,6 +13,12 @@
   --FILE: #2a5988;
   --RANK: #9b6710;
   --DIAGONAL: #773a72;
+  --PIECE: #5b4636;
+  --CLAIM: #625d56;
+  --CHECK: #c0392b;
+  --ATTACKS: #2a5988;
+  --FLIGHT: #9b6710;
+  --WINS: #2c6a4b;
 
   --body: "Newsreader", Georgia, serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
@@ -90,15 +96,42 @@ body {
 .span {
   --c: var(--ink);
   color: inherit;
+  background: transparent; /* <mark> is yellow by default */
   cursor: pointer;
   white-space: nowrap; /* "g-file" stays on one line */
   border-radius: 3px;
   transition: opacity 0.18s, box-shadow 0.18s;
 }
 .text.is-fresh .span { animation: stamp 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both; } /* not while typing */
-.span--START, .span--CONT { --c: var(--START); font: 600 0.84em/1 var(--mono); padding: 0.18em 0.32em; }
-.span--START { background: var(--START); color: var(--paper); }
-.span--CONT { background: var(--START-tint); color: var(--START); box-shadow: inset 0 -2px 0 var(--START); }
+/* moves: chosen = solid, rejected = struck through tint, other = tint */
+.span--MOVE { --c: var(--START); font: 600 0.84em/1 var(--mono); padding: 0.18em 0.32em; white-space: normal; }
+.span--MOVE.span--chosen { background: var(--START); color: var(--paper); }
+.span--MOVE.span--considered { background: var(--START-tint); color: var(--START); box-shadow: inset 0 -2px 0 var(--START); }
+.span--MOVE.span--rejected { background: var(--START-tint); color: var(--START); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--START) 55%, transparent); }
+.span--PIECE { --c: var(--PIECE); color: var(--c); font-weight: 600; font-style: italic; }
+/* claims: dotted underline in their colour */
+.span--claim { --c: var(--CLAIM); white-space: normal; text-decoration: underline dotted var(--c); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.span--CHECK, .span--MATE { --c: var(--CHECK); }
+.span--ATTACKS { --c: var(--ATTACKS); }
+.span--FLIGHT { --c: var(--FLIGHT); }
+.span--WINS { --c: var(--WINS); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; font-size: 14px; color: var(--ink-soft); }
+.legend .span { cursor: default; }
+
+.fen { display: grid; gap: 4px; }
+.fen__label { font: 400 12px/1 var(--mono); color: var(--ink-soft); }
+.fen input {
+  width: 100%;
+  font: 400 13px/1.4 var(--mono);
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--paper);
+}
+.fen input:focus { outline: 2px solid var(--FILE); outline-offset: 1px; }
+.fen input[aria-invalid="true"] { border-color: var(--START); background: var(--START-tint); }
 .span--SQUARE { --c: var(--SQUARE); }
 .span--FILE { --c: var(--FILE); }
 .span--RANK { --c: var(--RANK); }
@@ -109,7 +142,7 @@ body {
   padding: 0 0.12em;
   background: linear-gradient(transparent 52%, color-mix(in srgb, var(--c) 26%, transparent) 52%, color-mix(in srgb, var(--c) 26%, transparent) 92%, transparent 92%);
 }
-.span--illegal.span--START, .span--illegal.span--CONT {
+.span--illegal.span--MOVE {
   background: repeating-linear-gradient(-45deg, #eeeeee 0 5px, #e2e2e2 5px 10px);
   color: var(--illegal);
   box-shadow: inset 0 0 0 1px var(--illegal);

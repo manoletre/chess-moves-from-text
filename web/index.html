@@ -13,10 +13,25 @@
   <main class="desk">
     <section class="panel">
       <div class="examples" id="examples"></div>
+      <label class="fen">
+        <span class="fen__label">Position (FEN) the text talks about</span>
+        <input id="fen" type="text" spellcheck="false" autocomplete="off" placeholder="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1">
+      </label>
       <div class="text-frame">
         <div id="text" class="text" contenteditable="plaintext-only" spellcheck="false" aria-label="Chess commentary"></div>
         <div class="loader" id="loader" role="progressbar" aria-label="Loading the model"><span></span></div>
       </div>
+      <p class="legend">
+        <span class="span span--mention span--MOVE span--chosen">chosen move</span>
+        <span class="span span--mention span--MOVE span--rejected">rejected move</span>
+        <span class="span span--mention span--MOVE span--considered">other move</span>
+        <span class="span span--mention span--PIECE">piece</span>
+        <span class="span span--mention span--SQUARE">square</span>
+        <span class="span span--claim span--CHECK">check / mate</span>
+        <span class="span span--claim span--ATTACKS">attacks</span>
+        <span class="span span--claim span--FLIGHT">flight</span>
+        <span class="span span--claim span--WINS">wins</span>
+      </p>
     </section>
 
     <div class="board-frame">
