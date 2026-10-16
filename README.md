@@ -116,7 +116,7 @@ Test texts the model never trained on: **194 real reflections** from puzzles not
 
 **What the reward sees.** On the 347 test texts with a FEN, `verify.py` reaches the same verdict from v3.3's labels as from the hand labels for **95.5% of 5,732 facts**, and the same chosen move in **98.6%** of texts (v3.2 on the same texts and rules: 89.6% / 99.1%; on its own v3.2 test set: 94.3% / 99.0%). The chosen-move misses are 5 synthetic garbled / coach texts (v3.2: 3); on real reflections both get every chosen move. (EVAL facts are unverifiable here because the test set has no solution moves; the RL loop passes them.)
 
-The 4-bit browser model scores 0.982 / 0.914 (mentions / claims) on real reflections and 0.991 on commentary.
+The 4-bit browser model scores 0.986 / 0.939 (mentions / claims) on real reflections and 0.983 on commentary.
 
 v3.2 → v3.3 (on the v3.3 test set): real reflections 0.974 / 0.853 → 0.987 / 0.939, commentary 0.993 → 0.987.
 
