@@ -17,7 +17,15 @@ const MATE_WORD = /mate\b/i;
 const CHECK_WORD = /\bcheck/i;
 const NEGATED_END = /(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)/i;
 const REACH = /reach|go to|move to|get to|land on|jump to/i;
-const NEGATIVE_EVAL = /mistake|blunder|error|loses|losing|fails|falls short|\bbad\b|weak|wrong|refuted|dubious|too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\bdud\b|pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura/i;
+const NEGATIVE_EVAL_SRC = "mistake|blunder|error|loses|losing|fails|falls short|\\bbad\\b|weak|wrong|refuted|dubious|too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\\bdud\\b|pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura|"
+  // v3.3: how a refuted candidate is dismissed ("the attack fizzles", "lets White consolidate")
+  + "fizzl|dissolv|dissipat|defus|collaps|stall|peters? out|runs? out of steam|momentum|"
+  + "consolidat|reorgani[sz]|regroup|surviv|\\bescap|prolong|disrupt|wast|evaporat";
+const NEGATIVE_EVAL = new RegExp(NEGATIVE_EVAL_SRC, "i");
+const NEGATIVE_EVAL_ALL = new RegExp(NEGATIVE_EVAL_SRC, "gi");
+const BLOCK = /\b(block\w*|interpos\w*)\b/i;
+// wording that takes back an earlier verdict: rejecting a move and then choosing it after this is not a contradiction
+const REVISION = /\b(actually|on second thought|wait|reconsider\w*|in fact|after all|on closer (?:look|inspection)|looking again|look again|i was wrong|correction|re-?evaluat\w*|but no)\b/i;
 const ANAPHORA = /^\s*(that square|this square|those squares|these squares|it\b|them\b|both)/i;
 const CLAUSE_END = /[.;:!?\n]|,\s*(?:but|while|and then|so|because|as|whereas)\b|\bbut\b|\bbecause\b/g;
 const SENTENCE_END = /[.;!?\n]/g;
@@ -39,7 +47,8 @@ function givesMate(fen, move) {
 
 // Move text in any notation -> { move, status, note }. status: "ok", "illegal" or "ambiguous".
 // answered: the square of the move this one replies to ("recaptures" happens there).
-// note: [wrongSquare, actualSquare] when the move is clear but its starting square is wrong.
+// note: [wrongSquare, actualSquare] when the move is clear but its starting square is wrong, and
+// "several" when the text fits more than one legal move.
 export function resolveMove(fen, text, answered = null) {
   const game = new Chess(fen);
   const t = text.trim().replace(/…/g, "").replace(/^\.+/, "").replace(/^[*`!? ]+|[*`!? ]+$/g, "");
@@ -62,11 +71,14 @@ export function resolveMove(fen, text, answered = null) {
     // the move (whether they're true is checked as separate facts), a promotion must name its piece
     const [, letter, file, rank, to, promotion] = san;
     const piece = (letter ?? "p").toLowerCase();
+    // a pawn without a from-file moves along its file ("f3" is not gxf3), as in python-chess
     const found = legal.filter((x) => x.piece === piece && x.to === to && (!file || x.from[0] === file)
+      && (file || piece !== "p" || x.from[0] === to[0])
       && (!rank || x.from[1] === rank) && (x.promotion ?? null) === (promotion ? promotion.toLowerCase() : null));
     if (found.length === 1) return { move: found[0], status: "ok", note: null };
-    return fail(found.length > 1 ? "ambiguous" : "illegal");
+    return found.length > 1 ? { move: null, status: "ambiguous", note: "several" } : fail("illegal");
   }
+  if (BLOCK.test(t) && !CAPTURE_VERB.test(t)) return resolveBlock(game, t, legal);
   // long algebraic / arrows / prose: filter the legal moves by every constraint we can read
   let candidates = legal;
   const two = t.match(TWO_SQUARES);
@@ -113,7 +125,36 @@ export function resolveMove(fen, text, answered = null) {
     else candidates = exact;
   }
   if (candidates.length === 1) return { move: candidates[0], status: "ok", note };
-  return fail(candidates.length ? "ambiguous" : "illegal");
+  return candidates.length ? { move: null, status: "ambiguous", note: "several" } : fail("illegal");
+}
+
+// The squares strictly between two squares on a rank, file or diagonal (none otherwise).
+function between(a, b) {
+  const fa = FILES.indexOf(a[0]), ra = Number(a[1]), fb = FILES.indexOf(b[0]), rb = Number(b[1]);
+  const df = fb - fa, dr = rb - ra;
+  if (!(df === 0 || dr === 0 || Math.abs(df) === Math.abs(dr))) return [];
+  const out = [];
+  for (let f = fa + Math.sign(df), r = ra + Math.sign(dr); f !== fb || r !== rb; f += Math.sign(df), r += Math.sign(dr)) out.push(FILES[f] + r);
+  return out;
+}
+
+// "block with the rook (on e2)", "interpose the bishop on d2": a non-king move onto the line of a check.
+// A square holding one of the mover's pieces is where the blocker comes from, any other square where it goes.
+// Outside check there is nothing definite to block: ambiguous.
+function resolveBlock(game, t, legal) {
+  const turn = game.turn();
+  const king = findPiece(game, "k", turn);
+  if (!king || !game.inCheck()) return { move: null, status: "ambiguous", note: null };
+  const line = new Set(game.attackers(king, turn === "w" ? "b" : "w").flatMap((checker) => between(king, checker)));
+  let candidates = legal.filter((x) => x.from !== king && line.has(x.to));
+  for (const sq of t.match(/\b[a-h][1-8]\b/g) ?? []) {
+    if (game.get(sq)?.color === turn) candidates = candidates.filter((x) => x.from === sq);
+    else candidates = candidates.filter((x) => x.to === sq);
+  }
+  const kind = pieceKind(t);
+  if (kind) candidates = candidates.filter((x) => x.piece === kind);
+  if (candidates.length === 1) return { move: candidates[0], status: "ok", note: null };
+  return candidates.length ? { move: null, status: "ambiguous", note: "several" } : { move: null, status: "illegal", note: null };
 }
 
 function clauseBounds(text, pos) {
@@ -135,10 +176,28 @@ function pieceSquare(text, mention, mentions) {
   return null;
 }
 
-// "bishop sits on the a4-e8 diagonal", "a rook on the e-file" -> the line mention after the piece.
+// "bishop sits on the a4-e8 diagonal", "a rook on the e-file", "the king in the corner" -> the line or
+// region mention after the piece.
 function pieceLine(text, mention, mentions) {
-  return mentions.find((m) => ["FILE", "RANK", "DIAGONAL"].includes(m[2]) && m[0] >= mention[1]
-    && /^\s*(?:\w+\s+){0,2}(?:on|along|down|up)\s+the\s*$/.test(text.slice(mention[1], m[0]))) ?? null;
+  return mentions.find((m) => m[0] >= mention[1] && (
+    (["FILE", "RANK", "DIAGONAL"].includes(m[2]) && /^\s*(?:\w+\s+){0,2}(?:on|along|down|up)\s+the\s*$/.test(text.slice(mention[1], m[0])))
+    || (m[2] === "REGION" && /^\s*(?:\w+\s+){0,2}(?:in|on)\s+the\s*$/.test(text.slice(mention[1], m[0]))))) ?? null;
+}
+
+const CENTER = ["d4", "e4", "d5", "e5"];
+const BROAD_CENTER = [..."cdef"].flatMap((f) => [3, 4, 5, 6].map((r) => f + r)); // c3-f6
+const CORNERS = [..."abgh"].flatMap((f) => [1, 2, 7, 8].map((r) => f + r)); // the four 2x2 corner blocks
+
+// (v3.3) The squares of a REGION mention. The center is d4/e4/d5/e5, or c3-f6 when broad (where a king
+// can escape to) or said so ("extended center"); kingside = files e-h, queenside = files a-d; corner = the
+// four 2x2 corner blocks.
+export function regionSquares(text, broad = false) {
+  const t = text.toLowerCase();
+  if (t.includes("cent")) return broad || /extended|broad|wide/.test(t) ? BROAD_CENTER : CENTER;
+  if (t.includes("queen")) return allSquares().filter((sq) => "abcd".includes(sq[0]));
+  if (t.includes("king")) return allSquares().filter((sq) => "efgh".includes(sq[0]));
+  if (t.includes("corner")) return CORNERS;
+  return [];
 }
 
 export function lineSquares(text, kind) {
@@ -213,7 +272,7 @@ function movedFrom(last, square, game, kind = null) {
 }
 
 // fen + text + raw tagger output ({ mentions: [[s, e, type, line, stance, frame]], claims: [[s, e, type, frame]] })
-// -> { facts, moves, lines, chosen }
+// -> { facts, moves, lines, chosen, refutations, false_refutations, contradiction }
 // best: the puzzle's solution move (UCI), if known. Without it, EVAL claims are unverifiable.
 export function verify(fen, text, raw, best = null) {
   const mentions = [...raw.mentions].sort((a, b) => a[0] - b[0]);
@@ -226,6 +285,7 @@ export function verify(fen, text, raw, best = null) {
       detail: detail + (fallbackNow ? FALLBACK : ""), fallback: fallbackNow, ...extra });
 
   // 1. replay the lines: NEW from the puzzle position, NEXT after the previous move, ALT next to it
+  // (each move also knows the index of its line's first move, rootIndex, and its ply in that line)
   let prev = null;
   for (const m of mentions) {
     if (m[2] !== "MOVE") continue;
@@ -238,12 +298,15 @@ export function verify(fen, text, raw, best = null) {
       if (move) after = move.after;
     }
     const parent = line === "NEW" ? null : line === "NEXT" ? prev : prev.parent; // the move it is played after
-    const entry = { start: m[0], end: m[1], before, after, move, status, line, stance: m[4], parent, answered, text: text.slice(m[0], m[1]) };
+    const [rootIndex, ply] = line === "NEW" || !moves.length ? [moves.length, 0]
+      : [moves.at(-1).rootIndex, moves.at(-1).ply + (line === "NEXT" ? 1 : 0)];
+    const entry = { start: m[0], end: m[1], before, after, move, status, line, stance: m[4], parent, answered,
+      text: text.slice(m[0], m[1]), rootIndex, ply };
     moves.push(entry);
     prev = entry;
     const where = { frameFen: after ?? before, lastMove: move, related: [m[0]] };
     if (status === "ok") {
-      fact("legal_move", m[0], m[1], true, move.san, { ...where, frameFen: before, lastMove: null, targets: [move.from, move.to] });
+      fact("legal_move", m[0], m[1], true, move.san, { ...where, frameFen: before, lastMove: null, targets: [move.from, move.to], _line: entry });
       if (note) fact("placement", m[0], m[1], false, `not on ${note[0]}: the piece is on ${note[1]}`, { ...where, frameFen: before, lastMove: null, targets: note });
       const notation = text.slice(m[0], m[1]).replace(/[!?]+$/, "");
       const board = new Chess(after);
@@ -252,8 +315,11 @@ export function verify(fen, text, raw, best = null) {
       else if (/mate/i.test(notation)) fact("mate", m[0], m[1], board.isCheckmate(), "mate inside the move", where);
       else if (/\bcheck/i.test(notation)) fact("check", m[0], m[1], board.isCheck(), "check inside the move", where);
       if (/[a-h1-8]x[a-h]/.test(notation)) fact("capture", m[0], m[1], !!move.captured, "x in the notation", where);
+    } else if (status === "ambiguous" && note === "several" && ply % 2 === 1) {
+      // an opponent's reply stated as possible ("Black can recapture the queen") is true if any move fits
+      fact("legal_move", m[0], m[1], true, "possible: several moves fit", { frameFen: before, related: [m[0]], _line: entry });
     } else {
-      fact("legal_move", m[0], m[1], status === "illegal" ? false : null, status, { frameFen: before, related: [m[0]] });
+      fact("legal_move", m[0], m[1], status === "illegal" ? false : null, status, { frameFen: before, related: [m[0]], _line: entry });
     }
   }
 
@@ -300,9 +366,10 @@ export function verify(fen, text, raw, best = null) {
     } else {
       const line = pieceLine(text, m, mentions);
       if (line) {
-        const squares = lineSquares(text.slice(line[0], line[1]), line[2]);
+        const region = line[2] === "REGION";
+        const squares = region ? regionSquares(text.slice(line[0], line[1])) : lineSquares(text.slice(line[0], line[1]), line[2]);
         const found = squares.filter((sq) => { const p = game.get(sq); return p && p.type === kind && (!color || p.color === color); });
-        fact("placement", m[0], line[1], found.length > 0, `${found.length ? `on ${found[0]}` : "none"} on the ${text.slice(line[0], line[1])}`,
+        fact("placement", m[0], line[1], found.length > 0, `${found.length ? `on ${found[0]}` : "none"} ${region ? "in" : "on"} the ${text.slice(line[0], line[1])}`,
           { frameFen, lastMove: last?.move, related: [m[0], line[0]], targets: found.length ? found : squares });
       }
     }
@@ -324,7 +391,7 @@ export function verify(fen, text, raw, best = null) {
       if (nextSubject) hi = nextSubject[0];
     }
     let subject = mentions.filter((m) => m[0] >= lo && m[0] < start && (m[2] === "MOVE" || m[2] === "PIECE")).at(-1);
-    let objects = mentions.filter((m) => m[0] >= end && m[0] < hi && ["SQUARE", "PIECE", "FILE", "RANK", "DIAGONAL"].includes(m[2]));
+    let objects = mentions.filter((m) => m[0] >= end && m[0] < hi && ["SQUARE", "PIECE", "FILE", "RANK", "DIAGONAL", "REGION"].includes(m[2]));
     if (passive) { // "g1 is covered by the rook on g2": the agent is the subject, the thing before it the object
       const agent = mentions.find((m) => m[0] >= end && m[0] < (later ? later[0] : hi) && m[2] === "PIECE");
       if (agent) {
@@ -341,7 +408,8 @@ export function verify(fen, text, raw, best = null) {
       const value = kind === "CHECK" ? board.isCheck() : board.isCheckmate();
       // "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
       const negatedEnd = NEGATED_END.test(claimText);
-      fact(k, start, end, value !== negatedEnd, value ? `${kind === "CHECK" ? "check" : "checkmate"} on the board` : `no ${kind === "CHECK" ? "check" : "mate"} on the board`, extra);
+      fact(k, start, end, value !== negatedEnd, (value ? `${kind === "CHECK" ? "check" : "checkmate"} on the board` : `no ${kind === "CHECK" ? "check" : "mate"} on the board`)
+        + (negatedEnd ? ", claim negated" : ""), { ...extra, _line: last, _negated: negatedEnd });
     } else if (kind === "WINS") {
       const mv = (subject && moves.find((x) => x.start === subject[0])) || last;
       if (!mv?.move) { fact(k, start, end, null, "no resolved move", extra); continue; }
@@ -385,6 +453,15 @@ export function verify(fen, text, raw, best = null) {
           if (sq) targets.push(sq);
         }
       }
+      const regions = objects.filter((o) => o[2] === "REGION");
+      if (!targets.length && regions.length) { // "puts pressure on the center": attacks (or stands on) one of its squares
+        const hits = regions.map((o) => regionSquares(text.slice(o[0], o[1]))
+          .filter((sq) => sq === src || board.attackers(sq, piece.color).includes(src)));
+        const ok = negated ? !hits.some((h) => h.length) : hits.every((h) => h.length);
+        extra.targets = [src, ...hits.flat()];
+        fact(k, start, end, ok, regions.map((o, i) => `${text.slice(o[0], o[1])}: ${hits[i].length} squares`).join("; "), extra);
+        continue;
+      }
       const lines = objects.filter((o) => ["FILE", "RANK", "DIAGONAL"].includes(o[2]));
       if (!targets.length && lines.length) { // "controls the e-file": a line piece standing on that line
         const ok = lines.every((o) => onLine(board, src, text.slice(o[0], o[1]), o[2]));
@@ -409,6 +486,8 @@ export function verify(fen, text, raw, best = null) {
       fallbackNow = false; // an evaluation is about a move, not a position
       if (!best) { fact(k, start, end, null, "no solution move given", extra); continue; }
       let positive = !NEGATIVE_EVAL.test(claimText);
+      // "goes nowhere", "achieves nothing": a negative word that is itself a negation is not negated twice
+      const evalNegated = NEGATION.test(claimText.replace(NEGATIVE_EVAL_ALL, ""));
       let sideNegated = null;
       const side = text.slice(Math.max(0, start - 20), start).match(/\b(white|black)\b[\w\s']{0,12}$/i);
       if (side) { // "Black is lost", "White is winning": about a side, not a move
@@ -418,18 +497,22 @@ export function verify(fen, text, raw, best = null) {
           sideNegated = /\bnot\b|n't (?:lost|bust|hopeless|done)/i.test(claimText);
         } else if (/win/i.test(claimText)) positive = namedAttacker;
       }
-      if (sideNegated ?? negated) positive = !positive;
+      if (sideNegated ?? evalNegated) positive = !positive;
       const sentenceEnds = [...text.matchAll(SENTENCE_END)].map((m) => m.index);
       const sLo = Math.max(0, ...sentenceEnds.filter((i) => i + 1 <= start).map((i) => i + 1));
       const sHi = Math.min(text.length, ...sentenceEnds.filter((i) => i >= end));
-      const near = moves.filter((mv) => mv.start >= sLo && mv.start < sHi);
+      // about a candidate from the puzzle position, not a reply in its line ("Rh8+, but Black recaptures,
+      // dissolving the attack" is about Rh8+)
+      let near = moves.filter((mv) => mv.start >= sLo && mv.start < sHi);
+      if (near.some((mv) => mv.before === fen)) near = near.filter((mv) => mv.before === fen);
       const beforeClaim = near.filter((mv) => mv.start < start);
       const target = beforeClaim.at(-1) ?? near[0] ?? chosen;
       if (!target?.move) { fact(k, start, end, null, "no playable move to evaluate", extra); continue; }
       const uci = target.move.from + target.move.to + (target.move.promotion ?? "");
       const isBest = uci === best;
-      fact(k, start, end, isBest === positive, `${uci} ${isBest ? "is" : "is not"} the solution (${best})`,
-        { ...extra, frameFen: target.before, lastMove: null, targets: [target.move.from, target.move.to], related: [start, target.start] });
+      fact(k, start, end, isBest === positive, `${uci} ${isBest ? "is" : "is not"} the solution (${best})${positive ? "" : ", negative"}`,
+        { ...extra, frameFen: target.before, lastMove: null, targets: [target.move.from, target.move.to], related: [start, target.start],
+          _line: target, _negative: !positive });
     } else if (kind === "FLIGHT") {
       let color = null;
       if (subject?.[2] === "PIECE") {
@@ -442,14 +525,68 @@ export function verify(fen, text, raw, best = null) {
       if (!reachable) { fact(k, start, end, null, "no king", extra); continue; }
       const squares = objects.filter((o) => o[2] === "SQUARE").map((o) => squareOf(text.slice(o[0], o[1]))).filter(Boolean);
       const restrictive = negated || RESTRICTIVE.test(claimText);
+      const regions = objects.filter((o) => o[2] === "REGION");
+      if (regions.length && !squares.length) {
+        // "escapes to the center / kingside": reaches one of its squares; "cannot run to the queenside":
+        // none; "stuck in the corner": the king is there and every move stays there
+        const inside = regions.some((o) => /^\s*in\s+the\s*$/.test(text.slice(end, o[0]))
+          || (/\bin$/.test(claimText) && /^\s*the\s*$/.test(text.slice(end, o[0]))));
+        const area = new Set(regions.flatMap((o) => regionSquares(text.slice(o[0], o[1]), true)));
+        const kingSq = findPiece(board, "k", color);
+        const ok = inside && restrictive ? area.has(kingSq) && [...reachable].every((sq) => area.has(sq))
+          : restrictive ? ![...reachable].some((sq) => area.has(sq)) : [...reachable].some((sq) => area.has(sq));
+        extra.targets = [...area];
+        fact(k, start, end, ok, `king can go to: ${[...reachable].sort().join(", ") || "nowhere"} (${regions.map((o) => text.slice(o[0], o[1])).join(", ")})`,
+          { ...extra, _line: last, _restrictive: restrictive });
+        continue;
+      }
       const ok = squares.length
         ? squares.every((s) => (restrictive ? !reachable.has(s) : reachable.has(s)))
         : restrictive ? reachable.size === 0 : reachable.size > 0;
       extra.targets = squares.length ? squares : [...reachable];
-      fact(k, start, end, ok, `king can go to: ${[...reachable].sort().join(", ") || "nowhere"}`, extra);
+      fact(k, start, end, ok, `king can go to: ${[...reachable].sort().join(", ") || "nowhere"}`, { ...extra, _line: last, _restrictive: restrictive });
     }
   }
   fallbackNow = false;
+  const uciOf = (mv) => (mv?.move ? mv.move.from + mv.move.to + (mv.move.promotion ?? "") : null);
+  const chosenUci = uciOf(chosen);
+
+  // 4. refutations: what a rejected candidate is dismissed with. The opponent's replies in its line
+  // ("Black can recapture the queen"), the king getting away after it ("the king simply steps away"),
+  // a negated mate/check after it ("no mate follows") and a negative evaluation of it ("the attack fizzles").
+  const refutations = [];
+  for (const f of facts) {
+    const mv = f._line, restrictive = f._restrictive ?? false, negatedEnd = f._negated ?? false, negative = f._negative ?? false;
+    for (const key of ["_line", "_restrictive", "_negated", "_negative"]) delete f[key];
+    if (!mv || f.fallback) continue;
+    const rootMove = moves[mv.rootIndex];
+    if (rootMove.stance !== "REJECTED" || rootMove.before !== fen) continue;
+    let refutes = false;
+    if (f.kind === "legal_move") refutes = mv.ply % 2 === 1 && f.start === mv.start; // an opponent's move in the line
+    else if (f.kind === "flight") refutes = !restrictive;
+    else if (f.kind === "mate" || f.kind === "check") refutes = negatedEnd;
+    else if (f.kind === "eval") refutes = negative;
+    if (refutes) {
+      f.refutes = uciOf(rootMove) ?? rootMove.text;
+      refutations.push(f);
+    }
+  }
+
+  // 5. self-contradiction: a candidate rejected and later chosen as the same move, with nothing in between
+  // that takes the verdict back ("actually", "on second thought")
+  let contradiction = null;
+  if (chosenUci) {
+    for (const mv of moves) {
+      if (mv.stance !== "REJECTED" || mv.before !== fen || uciOf(mv) !== chosenUci) continue;
+      const later = chosenAll.find((x) => x.start > mv.start && uciOf(x) === chosenUci);
+      if (later && !REVISION.test(text.slice(mv.end, later.start))) {
+        contradiction = { move: chosenUci, rejected_at: mv.start, chosen_at: later.start,
+          rejected_text: mv.text, chosen_text: later.text,
+          refuted_by: refutations.filter((f) => f.refutes === chosenUci).map(({ kind, text: t, verdict, start }) => ({ kind, text: t, verdict, start })) };
+        break;
+      }
+    }
+  }
 
   // the lines as the checker replays them, for the summary panel
   const lines = [];
@@ -457,7 +594,8 @@ export function verify(fen, text, raw, best = null) {
     if (mv.line === "NEW" || !lines.length) lines.push({ stance: mv.stance, moves: [] });
     lines.at(-1).moves.push(mv);
   }
-  return { facts: facts.sort((a, b) => a.start - b.start), moves, lines, chosen };
+  return { facts: facts.sort((a, b) => a.start - b.start), moves, lines, chosen, refutations,
+    false_refutations: refutations.filter((f) => f.verdict === false).length, contradiction };
 }
 
 // The position a text span is about, by the same text-order rule: after the last move before it.

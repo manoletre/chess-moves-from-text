@@ -58,7 +58,7 @@ Label the **predicate words only**, never the pieces/squares (those are mentions
 | `attacks` | a piece attacks / covers / defends / controls a square or piece | `<covers>`, `<controls>`, `<attacks>`, `<eyes>`, `<hits>`, `<defends>`, `<protects>`, `<guards>`, `<is undefended>`, `<pinned>` |
 | `flight` | where a king (or piece) can or cannot go | `<cannot go to>`, `<can escape to>`, `<is boxed in>`, `<is hemmed in>`, `<has no escape>`, `<is trapped>`, `<escape routes>`, `<flight squares>` |
 
-Keep claim spans short (1-4 words). Don't label vague strategy ("strong", "active", "pressure", "fastest", "decisive", "the attack fizzles") — those are not checkable.
+Keep claim spans short (1-4 words). Don't label vague strategy ("strong", "active", "pressure", "fastest") — those are not checkable. (Since v3.2 "decisive" is `eval`; since v3.3 "the attack fizzles" is `eval` too, see sections 7 and 9.)
 A claim word that is itself a prose move (`capture the pawn on d7`) is part of the move, not a claim.
 `+` and `#` inside SAN are not separate claims.
 
@@ -83,7 +83,7 @@ White has a {queen}[piece] on {h7}[square] and a {pawn}[piece] on {d7}[square]. 
 - Moves made before the puzzle position ("the queen's earlier advance to f7") → piece + square, not a move.
 - Arrow notation (`f2→d1`) is a move. Leading `...` stays outside the span.
 - Alternatives in a dash/or list ("the king slips away—g4+ or g6"): the first is `next`, the others `alt` (see section 5).
-- Unlabelled: vague words (`escapes` with no square, `mating net`, `material is even`, `bearing down on`).
+- Unlabelled: vague words (`mating net`, `material is even`). (`escapes` with no square and `bearing down on` were unlabelled before v3.3; see section 9.)
 
 ## 5. Frames and alternative replies (second pass, required)
 
@@ -130,3 +130,21 @@ Already-labelled `mate` claims like `<the fastest and most direct mate>` stay `m
 - Garbled text ("the f6- pawn", "fxc2 wins a knight"): still label any square / move / piece you can see; `fxc2` is a move even if nonsense.
 - Characters `{ } < > [ ]` never appear in a label's text; if the original contains them, leave those characters unlabelled.
 - Spans never overlap and never start or end with a space.
+
+## 9. v3.3: refutations
+
+After RL, the puzzle model often dismisses a candidate with a stock refutation ("Rb3+ gives check but the king simply steps away") and then plays that very move. The refutation must be a checkable claim, so a false one costs reward.
+
+- **The king gets away, no square named** → `flight` on the verb phrase (modal and adverb inside, "then" outside), with the king as a piece: `the {king}[piece after] <simply steps away>[flight after]`, `<escapes>`, `<can slip away>`, `<flees>`, `<escapes to safety>`, `<escape the mating net>` (with the king as subject), `the {king}[piece after] can step to {d1}[square] and <escape>[flight after]`. The checker reads it as "the king has a legal move" in the frame (after the candidate). Nouns are not claims: "the king's escape squares", "an escape".
+- **The opponent's reply** stays a move, as before: `White can {recapture the queen}[move next rejected]`, `Black can {block with the rook}[move next rejected] or {capture the queen}[move alt rejected]`, `{White's queen can immediately capture it}[move next rejected]`. The checker resolves "block (with the rook on e2)" as a move onto the line of the check, and a reply that fits several legal moves ("recapture the queen" with two recaptures) counts as possible.
+- **The candidate's outcome** → `eval` (negative): `the <attack fizzles>[eval after]`, `<dissolving the attack>`, `the <mating net dissolves>`, `<lets White consolidate>`, `<giving Black time to reorganize>`, `leaving White <without a decisive follow-up>`, `White <has no immediate follow-up>` → `<no immediate follow-up>`, `leaving Black with <no compensation>`, `<prolonging the game>`, `<wastes the opportunity>`, `<is too slow>`, `<is not enough>`, `<escape the mating net>` / `and <survive>` (with a side, not the king, as subject). Span without a leading "the"/"a" and without "leaving X with" / "has". The checker reads it as "this candidate is not the solution".
+
+**Regions** (new mention type `region`): `{center}` / `{centre}`, `{kingside}`, `{queenside}` (also `king-side`, `queen-side`), `{corner}`. Always a mention, also as an adjective ("the {centre}[region] pawn", "Black's {kingside}[region] pieces"). The checker reads them as square sets: center = d4, e4, d5, e5 (c3–f6 where a king escapes to it, or when the text says "extended center"); kingside = files e–h; queenside = files a–d; corner = the four 2×2 corner blocks.
+- `the {king}[piece after] <escapes to>[flight after] the {center}[region]`: true if the king can reach one of its squares; `<cannot run to>` the {queenside}: none; `<is stuck in>` the {corner}: the king is there and every king move stays there.
+- `the {rook}[piece now] <puts pressure on>[attacks now] the {center}[region]`, `<controls>` the {kingside}: the piece attacks (or stands on) at least one of its squares; negated: none.
+- `the {king}[piece now] in the {corner}[region]` is a placement, like a piece on a file.
+
+**Pressure** wording with a target is `attacks` (it was unlabelled as vague): `<bearing down on>` {f2} / the {White king}, `<puts pressure on>`, `<keeps pressure on>`, `<pressures>`. Only with a square, piece, line or region after it in the clause; "keeping the pressure on" with no target stays unlabelled.
+
+`scripts/relabel_v33.py` applied these rules to all earlier labels.
+

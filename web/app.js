@@ -1,7 +1,7 @@
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.min.mjs";
 import { Chess } from "./vendor/chess.js";
 import { loadTagger } from "./tagger.js";
-import { positionBefore, verify } from "./verify.js";
+import { positionBefore, regionSquares, verify } from "./verify.js";
 import { audit } from "./audit.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
@@ -88,8 +88,11 @@ function squaresFor(span) {
     while (f !== f2) { f += Math.sign(f2 - f); r += Math.sign(r2 - r); out.push(FILES[f] + r); }
     return out;
   }
+  if (span.type === "REGION") return regionSquares(text);
   return [];
 }
+// REGION has no colour of its own: it is drawn like a square
+const spanColor = (type) => (type === "REGION" ? "SQUARE" : type);
 
 const KIND_LABEL = {
   legal_move: "move", check: "check", mate: "mate", capture: "capture", wins: "wins material",
@@ -177,9 +180,9 @@ function buildMarks(text, data) {
   }
   for (const m of data.raw.mentions) {
     if (m[2] === "MOVE") continue;
-    const loc = ["SQUARE", "FILE", "RANK", "DIAGONAL"].includes(m[2]);
+    const loc = ["SQUARE", "FILE", "RANK", "DIAGONAL", "REGION"].includes(m[2]);
     out.push({ start: m[0], end: m[1], kind: related.has(m[0]) || !loc ? "ref" : "loc", type: m[2],
-      text: text.slice(m[0], m[1]), cls: related.has(m[0]) || !loc ? "mk mk--ref" : `mk mk--loc span--${m[2]}`,
+      text: text.slice(m[0], m[1]), cls: related.has(m[0]) || !loc ? "mk mk--ref" : `mk mk--loc span--${spanColor(m[2])}`,
       title: m[2].toLowerCase() });
   }
   for (const h of audited.untagged) {
@@ -277,8 +280,15 @@ function renderReport(text) {
     return `<tr data-mark="${i}">
       <td><span class="kind">${KIND_LABEL[f.kind]}</span> “${escapeHtml(text.slice(f.start, f.end))}”</td>
       <td class="muted">${frameLabel(f)}</td>
-      <td class="col-check"><b class="v v--${v}">${BADGE[v]}</b> ${escapeHtml(f.detail)}</td></tr>`;
+      <td class="col-check"><b class="v v--${v}">${BADGE[v]}</b> ${escapeHtml(f.detail)}${f.refutes ? ` <span class="muted">· refutes ${escapeHtml(f.refutes)}</span>` : ""}</td></tr>`;
   }).join("");
+  // what the rejected candidates are dismissed with, and a rejected move later chosen anyway
+  const refutations = report.refutations.map((f) => {
+    const v = verdictKey(f.verdict);
+    return `<b class="v v--${v}">${BADGE[v]}</b> “${escapeHtml(f.text)}” <span class="muted">refutes ${escapeHtml(f.refutes)}</span>`;
+  }).join(" · ");
+  const x = report.contradiction;
+  const contradiction = x ? `<p class="col-check"><b class="v v--false">✗</b> contradiction: “${escapeHtml(x.rejected_text)}” is rejected, then chosen as “${escapeHtml(x.chosen_text)}” (${x.move})${x.refuted_by.length ? `, after ${x.refuted_by.length} refutation${x.refuted_by.length > 1 ? "s" : ""}` : ""}</p>` : "";
   reportEl.innerHTML = `
     <div class="report__head">
       <h2>What the tagger read</h2>
@@ -289,7 +299,9 @@ function renderReport(text) {
     </div>
     <p class="col-check counts">chess.js: <b class="v v--true">✓ ${counts.true}</b> true · <b class="v v--false">✗ ${counts.false}</b> false · <b class="v v--unknown">? ${counts.unknown}</b> can't tell</p>
     <h3>Chosen move</h3><p>${decision}${best ? ` <span class="col-check muted">· puzzle solution: ${best}</span>` : ""}</p>
+    ${contradiction}
     <h3>Lines</h3><ul class="lines">${lines || '<li class="muted">none</li>'}</ul>
+    ${refutations ? `<div class="col-check"><h3>Refutations</h3><p>${refutations}</p></div>` : ""}
     ${untaggedHtml()}
     <h3>Facts</h3>
     ${rows ? `<table class="facts"><thead><tr><th>tagger: claim</th><th>position</th><th class="col-check">chess.js</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">no claims</p>'}`;
@@ -335,7 +347,7 @@ function focusSpan(i) {
     // a location (or a piece) is shown on the position the text is at: after the last move before it
     const at = positionBefore(report, fen, m.start);
     const lit = m.kind === "loc" || m.type === "SQUARE" ? squaresFor(m) : [];
-    drawPosition(new Chess(at.fen), { lit, color: `var(--${m.type ?? "SQUARE"})`, lastMove: at.lastMove });
+    drawPosition(new Chess(at.fen), { lit, color: `var(--${spanColor(m.type ?? "SQUARE")})`, lastMove: at.lastMove });
   }
   editor.querySelectorAll(".mk").forEach((el) => {
     el.classList.toggle("is-lit", lit.has(Number(el.dataset.i)));

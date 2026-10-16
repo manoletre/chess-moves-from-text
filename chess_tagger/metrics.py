@@ -19,7 +19,7 @@ def score(examples: list[dict], predicted: list[dict]) -> dict:
     pm = [[tuple(m[:3]) for m in p["mentions"]] for p in predicted]
     out = {"examples": len(examples), "mention": f1(gm, pm),
            "mention_detection": f1([[m[:2] for m in g] for g in gm], [[m[:2] for m in p] for p in pm])}
-    for kind in ("MOVE", "PIECE", "SQUARE", "FILE", "RANK", "DIAGONAL"):
+    for kind in ("MOVE", "PIECE", "SQUARE", "FILE", "RANK", "DIAGONAL", "REGION"):
         only = lambda rows: [[m for m in r if m[2] == kind] for r in rows]
         out[f"mention_{kind}"] = f1(only(gm), only(pm))
 

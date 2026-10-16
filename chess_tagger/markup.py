@@ -5,6 +5,7 @@ Mentions are wrapped in braces, with their type and attributes in square bracket
     {Qxc3+}[move new rejected]   a move. line: new | next | alt   stance: chosen | rejected | considered
     {queen}[piece now]           a piece (with its colour if attached). frame: now | after
     {e4}[square]  {c-file}[file]  {7th rank}[rank]  {a1-h8}[diagonal]
+    {center}[region]  {kingside}[region]  {queenside}[region]  {corner}[region]   (v3.3)
 
 Claims are wrapped in angle brackets, with their type and frame:
 
@@ -29,7 +30,7 @@ The frame may be missing (None) in older labels; check(..., frames=True) require
 
 import re
 
-MENTION_TYPES = ["MOVE", "PIECE", "SQUARE", "FILE", "RANK", "DIAGONAL"]
+MENTION_TYPES = ["MOVE", "PIECE", "SQUARE", "FILE", "RANK", "DIAGONAL", "REGION"]
 CLAIM_TYPES = ["CHECK", "MATE", "WINS", "ATTACKS", "FLIGHT", "EVAL"]
 LINES = ["NEW", "NEXT", "ALT"]
 STANCES = ["CHOSEN", "REJECTED", "CONSIDERED"]
