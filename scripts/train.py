@@ -32,9 +32,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from chess_tagger.markup import FRAMES, LINES, STANCES  # noqa: E402
 from chess_tagger.metrics import headline, score, summary  # noqa: E402
-from chess_tagger.model import HEADS, ChessMoveTagger, decode, head_slices  # noqa: E402
+from chess_tagger.model import BASE_REVISION, HEADS, ChessMoveTagger, decode, head_slices  # noqa: E402
 
 MODEL_ID = "LiquidAI/LFM2.5-Encoder-230M"
+MODEL_REVISION = BASE_REVISION  # pinned Hub commit: weights, tokenizer and remote code
 MAX_LENGTH = 512
 IGNORE = -100
 
@@ -99,7 +100,7 @@ def main():
     val_refl = [e for e in val if e["group"] == "reflection"] or val
     print(f"device {device} | train {len(train)} | val {len(val)} ({len(val_refl)} reflections)")
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True)
     tokenizer.padding_side = "right"
 
     def encode(example):
@@ -121,7 +122,8 @@ def main():
         return out
 
     loader = DataLoader(features, batch_size=args.batch_size, shuffle=True, collate_fn=collate)
-    encoder = AutoModelForMaskedLM.from_pretrained(MODEL_ID, trust_remote_code=True).lfm2
+    encoder = AutoModelForMaskedLM.from_pretrained(
+        MODEL_ID, revision=MODEL_REVISION, code_revision=MODEL_REVISION, trust_remote_code=True).lfm2
     model = ChessMoveTagger(encoder).to(device)
     slices = head_slices()
 
@@ -173,7 +175,8 @@ def main():
             save_model(model, str(args.out / "model.safetensors"))
             tokenizer.save_pretrained(args.out)
             (args.out / "tagger_config.json").write_text(json.dumps(
-                {"base_model": MODEL_ID, "heads": HEADS, "max_length": MAX_LENGTH, "version": "3.0.0"}, indent=2))
+                {"base_model": MODEL_ID, "base_revision": MODEL_REVISION, "heads": HEADS, "max_length": MAX_LENGTH,
+                 "version": "3.0.0"}, indent=2))
         print(f"epoch {epoch} ({time.time() - started:.0f}s) loss {history[-1]['loss']:.4f} | "
               f"val reflections: {summary(metrics)} | all val mention F1 {all_val['mention']['f1']:.3f}"
               + ("  ✓ saved" if saved else ""), flush=True)

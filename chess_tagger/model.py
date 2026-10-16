@@ -27,6 +27,11 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from .markup import CLAIM_TYPES, FRAMES, LINES, MENTION_TYPES, STANCES, MarkupError, render
 
+# Commit of the base model on the Hub whose remote code (modeling_lfm2_bidirectional.py)
+# and config the tagger is built from. Pinned so an upstream push can't change the
+# model mid-run; tagger_config.json may override it with "base_revision".
+BASE_REVISION = "0b649ad0c684378b03d4d8304f7577a662ab89bc"
+
 TRIM = " \n\t.,;:!?*`()\"'"  # never at the edge of a span (but + # = - are kept)
 
 
@@ -146,6 +151,7 @@ class ChessTagger:
             raise ValueError("this model was trained with other labels; use the matching version of chess_tagger")
         self.max_length = config["max_length"]
         self.base_model = config["base_model"]
+        self.base_revision = config.get("base_revision", BASE_REVISION)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else
                                               "mps" if torch.backends.mps.is_available() else "cpu"))
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
@@ -156,8 +162,10 @@ class ChessTagger:
         # Build the architecture from the base model's config only (no pretrained
         # weights download), then copy our weights in one tensor at a time.
         body_class = get_class_from_dynamic_module(
-            "modeling_lfm2_bidirectional.Lfm2BidirectionalModel", self.base_model)
-        body_config = AutoConfig.from_pretrained(self.base_model, trust_remote_code=True)
+            "modeling_lfm2_bidirectional.Lfm2BidirectionalModel", self.base_model,
+            revision=self.base_revision, code_revision=self.base_revision)
+        body_config = AutoConfig.from_pretrained(self.base_model, trust_remote_code=True,
+                                                 revision=self.base_revision, code_revision=self.base_revision)
         model = ChessMoveTagger(body_class(body_config))
         params = model.state_dict()
         with safe_open(str(weights), framework="pt") as f:
