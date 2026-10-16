@@ -28,6 +28,13 @@
     "text": "Ng6+ and it's over: the king is dead and Black can only resign. Ng6+ is crushing, the cleanest win on the board. The rook on h2 can wait."
   },
   {
+    "label": "Refutes the move it then plays (after RL)",
+    "fen": "5k2/4b3/7p/p7/8/1BP4r/PK4R1/5r2 w - - 0 42",
+    "text": "White's rook on g2 is aimed at the g8 square, and the black rook on f1 is too far to interfere. The rook can swing to g8 and deliver check, but Black's king simply steps away and the attack fizzles. The bishop on b3 already controls g8, so the rook can land there and deliver immediate checkmate. So the move is Rg8#.",
+    "group": "reflection",
+    "best": "g2g8"
+  },
+  {
     "label": "Engine summary with lines",
     "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
     "text": "Stockfish prefers Black's Bc5 over Nd4. In this short search, Nd4 loses about 1.1 pawns of evaluation. The game continued Nd4 Nxe5 Qg5 Nxf7 Qxg2 Rf1 Qxe4+ Be2 Nf3#. Stockfish's line after Bc5 begins Bc5 c3 Nf6 d4 exd4.\n\nNd4 sets a trap: the pawn on e5 looks free, but taking it opens the g-file for Black's queen.",

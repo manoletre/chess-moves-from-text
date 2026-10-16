@@ -5,7 +5,7 @@ import { positionBefore, regionSquares, verify } from "./verify.js";
 import { audit } from "./audit.js";
 
 const MODEL_URL = "model"; // model_q4.onnx, tokenizer.json, tagger_config.json (see scripts/export_onnx.py)
-const MODEL_CACHE = "chess-move-tagger-v3.2";
+const MODEL_CACHE = "chess-move-tagger-v3.3";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 
 const FILES = "abcdefgh";
