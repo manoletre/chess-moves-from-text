@@ -43,7 +43,10 @@ TWO_SQUARES = re.compile(r"([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])")
 FALLBACK = " (checked before the unplayable move)"
 NEGATIVE_EVAL = re.compile(r"mistake|blunder|error|loses|losing|fails|falls short|\bbad\b|weak|wrong|refuted|dubious|"
                            r"too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\bdud\b|"
-                           r"pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura", re.I)
+                           r"pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura|"
+                           # v3.3: how a refuted candidate is dismissed ("the attack fizzles", "lets White consolidate")
+                           r"fizzl|dissolv|dissipat|defus|collaps|stall|peters? out|runs? out of steam|momentum|"
+                           r"consolidat|reorgani[sz]|regroup|surviv|\bescap|prolong|disrupt|wast|evaporat", re.I)
 NEGATED_END = re.compile(r"(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)", re.I)
 REACH = re.compile(r"reach|go to|move to|get to|land on|jump to", re.I)
 ANAPHORA = re.compile(r"\s*(that square|this square|those squares|these squares|it\b|them\b|both)", re.I)
@@ -51,6 +54,10 @@ SENTENCE_END = re.compile(r"[.;!?\n]")
 RECAPTURE = re.compile(r"\b(recaptur\w*|takes? (it|back)|captur\w* (it|back)|retak\w*)\b", re.I)
 MATE_WORD = re.compile(r"mate\b", re.I)
 CHECK_WORD = re.compile(r"\bcheck", re.I)
+BLOCK = re.compile(r"\b(block\w*|interpos\w*)\b", re.I)
+# wording that takes back an earlier verdict: rejecting a move and then choosing it after this is not a contradiction
+REVISION = re.compile(r"\b(actually|on second thought|wait|reconsider\w*|in fact|after all|on closer (?:look|inspection)|"
+                      r"looking again|look again|i was wrong|correction|re-?evaluat\w*|but no)\b", re.I)
 CLAUSE_END = re.compile(r"[.;:!?\n]|,\s*(?:but|while|and then|so|because|as|whereas)\b|\bbut\b|\bbecause\b")
 
 
@@ -83,7 +90,7 @@ def resolve_move(board: chess.Board, text: str, answered: int | None = None):
     status is 'ok', 'illegal' or 'ambiguous'. `answered` is the square the move being replied to
     landed on, so "recaptures" / "takes it" can be resolved without a square. note is set when the
     move is clear but the text gets part of it wrong ("the bishop on e5 slides to f7" when the bishop
-    is on d5): (wrong_square, actual_square)."""
+    is on d5): (wrong_square, actual_square); and to "several" when the text fits more than one legal move."""
     t = text.strip().replace("…", "").lstrip(".").strip("*`!? ")
     legal = list(board.legal_moves)
     if not legal:
@@ -109,9 +116,11 @@ def resolve_move(board: chess.Board, text: str, answered: int | None = None):
         try:
             return board.parse_san(t), "ok", None
         except chess.AmbiguousMoveError:
-            return None, "ambiguous", None
+            return None, "ambiguous", "several"
         except ValueError:
             return None, "illegal", None
+    if BLOCK.search(t) and not CAPTURE_VERB.search(t):
+        return _resolve_block(board, t, legal)
     # long algebraic / arrows / prose: filter the legal moves by every constraint we can read
     candidates = legal
     two = TWO_SQUARES.search(t)
@@ -170,7 +179,32 @@ def resolve_move(board: chess.Board, text: str, answered: int | None = None):
             candidates = exact
     if len(candidates) == 1:
         return candidates[0], "ok", note
-    return None, "illegal" if not candidates else "ambiguous", None
+    return None, "illegal" if not candidates else "ambiguous", "several" if candidates else None
+
+
+def _resolve_block(board, t, legal):
+    """'block with the rook (on e2)', 'interpose the bishop on d2': a non-king move onto the line of a check.
+    A square holding one of the mover's pieces is where the blocker comes from, any other square where it goes.
+    Outside check there is nothing definite to block: ambiguous."""
+    king = board.king(board.turn)
+    if king is None or not board.is_check():
+        return None, "ambiguous", None
+    between = chess.SquareSet()
+    for checker in board.checkers():
+        between |= chess.SquareSet.between(king, checker)
+    candidates = [mv for mv in legal if mv.from_square != king and mv.to_square in between]
+    for name in SQUARE.findall(t):
+        sq = chess.parse_square(name)
+        if board.color_at(sq) == board.turn:
+            candidates = [mv for mv in candidates if mv.from_square == sq]
+        else:
+            candidates = [mv for mv in candidates if mv.to_square == sq]
+    word = PIECE_WORD.search(t)
+    if word:
+        candidates = [mv for mv in candidates if board.piece_type_at(mv.from_square) == PIECES[word.group(1).lower()]]
+    if len(candidates) == 1:
+        return candidates[0], "ok", None
+    return None, "illegal" if not candidates else "ambiguous", "several" if candidates else None
 
 
 def _gives_mate(board, move):
@@ -219,11 +253,36 @@ def _line_squares(text: str, kind: str) -> list:
     return list(chess.SquareSet.between(a, b)) + [a, b]
 
 
+CENTER = [chess.D4, chess.E4, chess.D5, chess.E5]
+BROAD_CENTER = [chess.square(f, r) for f in range(2, 6) for r in range(2, 6)]  # c3-f6
+CORNERS = [chess.square(f, r) for f in (0, 1, 6, 7) for r in (0, 1, 6, 7)]  # the four 2x2 corner blocks
+
+
+def _region_squares(text: str, broad: bool = False) -> list:
+    """(v3.3) The squares of a REGION mention. The center is d4/e4/d5/e5, or c3-f6 when broad (where a king
+    can escape to) or said so ("extended center"); kingside = files e-h, queenside = files a-d; corner = the
+    four 2x2 corner blocks."""
+    t = text.lower()
+    if "cent" in t:
+        return BROAD_CENTER if broad or re.search(r"extended|broad|wide", t) else CENTER
+    if "queen" in t:
+        return [sq for sq in chess.SQUARES if chess.square_file(sq) <= 3]
+    if "king" in t:
+        return [sq for sq in chess.SQUARES if chess.square_file(sq) >= 4]
+    if "corner" in t:
+        return CORNERS
+    return []
+
+
 def _piece_line(text: str, mention, mentions):
-    """'bishop sits on the a4-e8 diagonal', 'a rook on the e-file' -> the line mention after the piece."""
+    """'bishop sits on the a4-e8 diagonal', 'a rook on the e-file', 'the king in the corner' -> the line or
+    region mention after the piece."""
     for m in mentions:
         if m[2] in ("FILE", "RANK", "DIAGONAL") and m[0] >= mention[1] and \
                 re.fullmatch(r"\s*(?:\w+\s+){0,2}(?:on|along|down|up)\s+the\s*", text[mention[1]:m[0]]):
+            return m
+        if m[2] == "REGION" and m[0] >= mention[1] and \
+                re.fullmatch(r"\s*(?:\w+\s+){0,2}(?:in|on)\s+the\s*", text[mention[1]:m[0]]):
             return m
     return None
 
@@ -280,14 +339,15 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
     defender = not root.turn  # the side the puzzle is played against
     mentions = sorted(tagged["mentions"], key=lambda m: m[0])
     claims = sorted(tagged.get("claims") or [], key=lambda c: c[0])
-    facts, moves = [], []  # moves: (start, end, before, move, after, stance)
+    facts, moves = [], []  # moves: (start, end, before, move, after, stance, line root index, ply in the line)
 
     state = {"fallback": False}  # set while checking in the position before an unplayable move
 
-    def fact(kind, span, verdict, detail=""):
+    def fact(kind, span, verdict, detail="", line=None):
+        """line: the move tuple whose line this fact belongs to (the position it is checked in, or the move itself)."""
         facts.append({"kind": kind, "start": span[0], "end": span[1], "text": text[span[0]:span[1]],
                       "verdict": verdict, "detail": detail + (FALLBACK if state["fallback"] else ""),
-                      "fallback": state["fallback"]})
+                      "fallback": state["fallback"], "_line": line})
 
     # 1. replay the lines
     prev = None  # (before, after, move, answered_square) of the previous move
@@ -304,10 +364,14 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             if move is not None:
                 after = before.copy(stack=False)
                 after.push(move)
-        moves.append((m[0], m[1], before, move, after, m[4]))
+        if line == "NEW" or not moves:
+            root_index, ply = len(moves), 0
+        else:
+            root_index, ply = moves[-1][6], moves[-1][7] + (1 if line == "NEXT" else 0)
+        moves.append((m[0], m[1], before, move, after, m[4], root_index, ply))
         prev = (before, after, move, answered)
         if status == "ok":
-            fact("legal_move", m, True, move.uci())
+            fact("legal_move", m, True, move.uci(), line=moves[-1])
             if note:
                 fact("placement", m, False, f"not on {chess.square_name(note[0])}: the piece is on {chess.square_name(note[1])}")
             notation = text[m[0]:m[1]]
@@ -321,8 +385,11 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
                 fact("check", m, after.is_check(), "check inside the move")
             if re.search(r"[a-h1-8]x[a-h]", notation):
                 fact("capture", m, before.is_capture(move), "x in notation")
+        elif status == "ambiguous" and note == "several" and ply % 2 == 1:
+            # an opponent's reply stated as possible ("Black can recapture the queen") is true if any move fits
+            fact("legal_move", m, True, "possible: several moves fit", line=moves[-1])
         else:
-            fact("legal_move", m, False if status == "illegal" else None, status)
+            fact("legal_move", m, False if status == "illegal" else None, status, line=moves[-1])
 
     # the reflection's conclusion: the last chosen move that can be played from the puzzle position
     # (a reply mistaken for a new chosen move can't be played there, so it doesn't override the decision)
@@ -363,12 +430,13 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             if line is None or word is None:
                 continue
             board, last, fallback = frame_board(m, m[5])
-            squares = _line_squares(text[line[0]:line[1]], line[2])
+            squares = (_region_squares(text[line[0]:line[1]]) if line[2] == "REGION"
+                       else _line_squares(text[line[0]:line[1]], line[2]))
             kind, color = PIECES[word.group(1).lower()], color_of(text[m[0]:m[1]])
             found = [sq for sq in squares if board.piece_type_at(sq) == kind and (color is None or board.color_at(sq) == color)]
             state["fallback"] = fallback
             fact("placement", (m[0], line[1]), bool(found), (f"on {chess.square_name(found[0])}" if found else "none") +
-                 f" on the {text[line[0]:line[1]]}")
+                 f" {'in' if line[2] == 'REGION' else 'on'} the {text[line[0]:line[1]]}")
             state["fallback"] = False
             continue
         board, last, fallback = frame_board(m, m[5])
@@ -401,7 +469,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             if next_subject is not None:
                 hi = next_subject[0]
         subject = next((m for m in reversed(mentions) if lo <= m[0] < start and m[2] in ("MOVE", "PIECE")), None)
-        objects = [m for m in mentions if end <= m[0] < hi and m[2] in ("SQUARE", "PIECE", "FILE", "RANK", "DIAGONAL")]
+        objects = [m for m in mentions if end <= m[0] < hi and m[2] in ("SQUARE", "PIECE", "FILE", "RANK", "DIAGONAL", "REGION")]
         if passive:  # "g1 is covered by the rook on g2": the agent is the subject, the thing before it the object
             agent = next((m for m in mentions if end <= m[0] < (later[0] if later else hi) and m[2] == "PIECE"), None)
             if agent is not None:
@@ -413,7 +481,7 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             value = board.is_check() if kind == "CHECK" else board.is_checkmate()
             # "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
             negated = bool(NEGATED_END.search(claim_text))
-            fact(kind.lower(), c, value != negated)
+            fact(kind.lower(), c, value != negated, "negated" if negated else "", line=last_move)
         elif kind == "WINS":
             mv = next((x for x in moves if subject and x[0] == subject[0]), last_move)
             if mv is None or mv[3] is None:
@@ -467,6 +535,14 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
                                      _piece_square(text, o, mentions)) if w else None
                     if sq is not None:
                         targets.append(sq)
+            regions = [o for o in objects if o[2] == "REGION"]
+            if not targets and regions:  # "puts pressure on the center": attacks (or stands on) one of its squares
+                own = board.color_at(src)
+                hits = {text[o[0]:o[1]]: [sq for sq in _region_squares(text[o[0]:o[1]])
+                                          if sq == src or src in board.attackers(own, sq)] for o in regions}
+                ok = all(hits.values()) if not negated else not any(hits.values())
+                fact("attacks", c, ok, "; ".join(f"{name}: {len(sqs)} squares" for name, sqs in hits.items()))
+                continue
             lines = [o for o in objects if o[2] in ("FILE", "RANK", "DIAGONAL")]
             if not targets and lines:  # "controls the e-file": a line piece standing on that line
                 ok = all(_on_line(board, src, text[o[0]:o[1]], o[2]) for o in lines)
@@ -495,6 +571,8 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
                 fact("eval", c, None, "no solution move given")
                 continue
             positive = not NEGATIVE_EVAL.search(claim_text)
+            # "goes nowhere", "achieves nothing": a negative word that is itself a negation is not negated twice
+            negated = bool(NEGATION.search(NEGATIVE_EVAL.sub("", claim_text)))
             side = re.search(r"\b(white|black)\b[\w\s']{0,12}$", text[max(0, start - 20):start], re.I)
             if side:  # "Black is lost", "White is winning": about a side, not a move
                 named_attacker = (side.group(1).lower() == "white") == (root.turn == chess.WHITE)
@@ -507,7 +585,10 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
                 positive = not positive
             s_lo = max([m.end() for m in SENTENCE_END.finditer(text) if m.end() <= start] or [0])
             s_hi = min([m.start() for m in SENTENCE_END.finditer(text) if m.start() >= end] or [len(text)])
+            # about a candidate from the puzzle position, not a reply in its line ("Rh8+, but Black recaptures,
+            # dissolving the attack" is about Rh8+)
             near = [mv for mv in moves if s_lo <= mv[0] < s_hi]
+            near = [mv for mv in near if mv[2] is root] or near
             before_claim = [mv for mv in near if mv[0] < start]
             target = before_claim[-1] if before_claim else (near[0] if near else chosen)
             if target is None or target[3] is None:
@@ -515,7 +596,8 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
                 continue
             is_best = target[3].uci() == best
             fact("eval", c, is_best == positive,
-                 f"{target[3].uci()} {'is' if is_best else 'is not'} the solution ({best})")
+                 f"{target[3].uci()} {'is' if is_best else 'is not'} the solution ({best})" + ("" if positive else ", negative"),
+                 line=target)
         elif kind == "FLIGHT":
             color = None
             if subject is not None and subject[2] == "PIECE":
@@ -532,18 +614,81 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             squares = [square_of(text[o[0]:o[1]]) for o in objects if o[2] == "SQUARE"]
             squares = [sq for sq in squares if sq is not None]
             restrictive = negated or bool(RESTRICTIVE.search(claim_text))
+            regions = [o for o in objects if o[2] == "REGION"]
+            king_sq = board.king(color)
+            if regions and not squares:
+                # "escapes to the center / kingside": reaches one of its squares; "cannot run to the queenside":
+                # none; "stuck in the corner": the king is there and every move stays there
+                inside = [o for o in regions if re.fullmatch(r"\s*in\s+the\s*", text[end:o[0]])
+                          or (re.search(r"\bin$", claim_text) and re.fullmatch(r"\s*the\s*", text[end:o[0]]))]
+                area = [sq for o in regions for sq in _region_squares(text[o[0]:o[1]], broad=True)]
+                if inside and restrictive:
+                    ok = king_sq in area and all(sq in area for sq in reachable)
+                elif restrictive:
+                    ok = not any(sq in area for sq in reachable)
+                else:
+                    ok = any(sq in area for sq in reachable)
+                fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none")
+                     + " (" + ", ".join(text[o[0]:o[1]] for o in regions) + ")", line=last_move)
+                facts[-1]["_restrictive"] = restrictive
+                continue
             if squares:
                 ok = all(s not in reachable for s in squares) if restrictive else all(s in reachable for s in squares)
             else:
                 ok = (not reachable) if restrictive else bool(reachable)
-            fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none"))
+            fact("flight", c, ok, "king moves: " + (", ".join(chess.square_name(s) for s in sorted(reachable)) or "none"),
+                 line=last_move)
+            facts[-1]["_restrictive"] = restrictive
 
     state["fallback"] = False
     chosen_uci = chosen[3].uci() if chosen and chosen[3] else None
+
+    # 4. refutations: what a rejected candidate is dismissed with. The opponent's replies in its line
+    # ("Black can recapture the queen"), the king getting away after it ("the king simply steps away"),
+    # a negated mate/check after it ("no mate follows") and a negative evaluation of it ("the attack fizzles").
+    refutations = []
+    for f in facts:
+        mv, restrictive = f.pop("_line"), f.pop("_restrictive", False)
+        if mv is None or f["fallback"]:
+            continue
+        root_move = moves[mv[6]]
+        if root_move[5] != "REJECTED" or root_move[2] is not root:
+            continue
+        if f["kind"] == "legal_move":
+            refutes = mv[7] % 2 == 1 and f["start"] == mv[0]  # an opponent's move in the line
+        elif f["kind"] == "flight":
+            refutes = not restrictive
+        elif f["kind"] in ("mate", "check"):
+            refutes = f["detail"] == "negated"
+        elif f["kind"] == "eval":
+            refutes = "negative" in f["detail"]
+        else:
+            refutes = False
+        if refutes:
+            f["refutes"] = root_move[3].uci() if root_move[3] else text[root_move[0]:root_move[1]]
+            refutations.append(f)
+
+    # 5. self-contradiction: a candidate rejected and later chosen as the same move, with nothing in between
+    # that takes the verdict back ("actually", "on second thought")
+    contradiction = None
+    if chosen_uci:
+        for mv in moves:
+            if mv[5] != "REJECTED" or mv[2] is not root or mv[3] is None or mv[3].uci() != chosen_uci:
+                continue
+            later = next((x for x in chosen_all if x[0] > mv[0] and x[3] is not None and x[3].uci() == chosen_uci), None)
+            if later is not None and not REVISION.search(text[mv[1]:later[0]]):
+                contradiction = {"move": chosen_uci, "rejected_at": mv[0], "chosen_at": later[0],
+                                 "rejected_text": text[mv[0]:mv[1]], "chosen_text": text[later[0]:later[1]],
+                                 "refuted_by": [{k: f[k] for k in ("kind", "text", "verdict", "start")}
+                                                for f in refutations if f["refutes"] == chosen_uci]}
+                break
     summary = {}
     for f in facts:
         s = summary.setdefault(f["kind"], {"true": 0, "false": 0, "unverifiable": 0})
         s["true" if f["verdict"] is True else "false" if f["verdict"] is False else "unverifiable"] += 1
     return {"facts": facts, "summary": summary, "chosen": chosen_uci,
             "chosen_mentioned": chosen is not None,
-            "matches_played": (chosen_uci == played) if played and chosen_uci else None}
+            "matches_played": (chosen_uci == played) if played and chosen_uci else None,
+            "refutations": refutations,
+            "false_refutations": sum(f["verdict"] is False for f in refutations),
+            "contradiction": contradiction}

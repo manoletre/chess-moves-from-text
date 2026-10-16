@@ -176,7 +176,7 @@ def main():
             tokenizer.save_pretrained(args.out)
             (args.out / "tagger_config.json").write_text(json.dumps(
                 {"base_model": MODEL_ID, "base_revision": MODEL_REVISION, "heads": HEADS, "max_length": MAX_LENGTH,
-                 "version": "3.0.0"}, indent=2))
+                 "version": "3.3.0"}, indent=2))
         print(f"epoch {epoch} ({time.time() - started:.0f}s) loss {history[-1]['loss']:.4f} | "
               f"val reflections: {summary(metrics)} | all val mention F1 {all_val['mention']['f1']:.3f}"
               + ("  ✓ saved" if saved else ""), flush=True)

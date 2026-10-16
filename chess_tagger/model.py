@@ -3,7 +3,7 @@
 The model is the LFM2.5 encoder plus ONE linear layer whose outputs are split
 into four heads, each with its own softmax:
 
-    mention  BIO over MOVE, PIECE, SQUARE, FILE, RANK, DIAGONAL   (13 labels)
+    mention  BIO over MOVE, PIECE, SQUARE, FILE, RANK, DIAGONAL, REGION   (15 labels; REGION is v3.3)
     line     NEW | NEXT | ALT                  (read on the tokens of a MOVE span)
     stance   CHOSEN | REJECTED | CONSIDERED    (read on the tokens of a MOVE span)
     frame    NOW | AFTER                       (read on the tokens of a PIECE span or a claim)
@@ -41,6 +41,12 @@ def bio(types):
 
 HEADS = {"mention": bio(MENTION_TYPES), "line": LINES, "stance": STANCES, "frame": FRAMES,
          "claim": bio(CLAIM_TYPES)}
+
+
+def compatible(heads: dict) -> bool:
+    """A model trained with an earlier label set (every head a prefix of the current one, e.g. v3.2 without
+    REGION) still decodes: it simply never predicts the newer labels."""
+    return set(heads) == set(HEADS) and all(HEADS[k][:len(v)] == v for k, v in heads.items())
 
 
 def head_slices(heads: dict = HEADS) -> dict:
@@ -99,10 +105,10 @@ def bio_spans(text: str, offsets: list, labels: list[str]) -> list:
     return cleaned
 
 
-def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool = True) -> dict:
-    """Token logits [tokens, NUM_OUTPUTS] ->
+def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool = True, heads: dict = HEADS) -> dict:
+    """Token logits [tokens, outputs] ->
     {"mentions": [[s, e, type, line, stance, frame]], "claims": [[s, e, type, frame]]} (None where n/a)."""
-    sl = head_slices()
+    sl = head_slices(heads)
 
     def attribute(head, labels, t0, t1):  # average the head's log-probabilities over the span's tokens
         return labels[int(logits[t0:t1 + 1, sl[head]].log_softmax(-1).mean(0).argmax())]
@@ -110,7 +116,7 @@ def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool 
     mention_ids = logits[:, sl["mention"]].argmax(-1).tolist()
     claim_ids = logits[:, sl["claim"]].argmax(-1).tolist()
     mentions = []
-    for start, end, kind, t0, t1 in bio_spans(text, offsets, [HEADS["mention"][i] for i in mention_ids]):
+    for start, end, kind, t0, t1 in bio_spans(text, offsets, [heads["mention"][i] for i in mention_ids]):
         line = stance = frame = None
         if kind == "MOVE":
             line, stance = attribute("line", LINES, t0, t1), attribute("stance", STANCES, t0, t1)
@@ -122,7 +128,7 @@ def decode(text: str, offsets: list, logits: torch.Tensor, first_move_new: bool 
     if first_move is not None and first_move_new:
         first_move[3] = "NEW"  # nothing to continue yet
     claims = [[s, e, k, attribute("frame", FRAMES, t0, t1)]
-              for s, e, k, t0, t1 in bio_spans(text, offsets, [HEADS["claim"][i] for i in claim_ids])]
+              for s, e, k, t0, t1 in bio_spans(text, offsets, [heads["claim"][i] for i in claim_ids])]
     return {"mentions": mentions, "claims": claims}
 
 
@@ -147,8 +153,9 @@ class ChessTagger:
     def __init__(self, model_dir: str | Path, device: str | None = None):
         model_dir = Path(model_dir)
         config = json.loads((model_dir / "tagger_config.json").read_text())
-        if config.get("heads") != HEADS:
+        if not compatible(config.get("heads") or {}):
             raise ValueError("this model was trained with other labels; use the matching version of chess_tagger")
+        self.heads = {k: config["heads"][k] for k in HEADS}  # in the order of the output layer
         self.max_length = config["max_length"]
         self.base_model = config["base_model"]
         self.base_revision = config.get("base_revision", BASE_REVISION)
@@ -166,7 +173,7 @@ class ChessTagger:
             revision=self.base_revision, code_revision=self.base_revision)
         body_config = AutoConfig.from_pretrained(self.base_model, trust_remote_code=True,
                                                  revision=self.base_revision, code_revision=self.base_revision)
-        model = ChessMoveTagger(body_class(body_config))
+        model = ChessMoveTagger(body_class(body_config), num_labels=sum(len(v) for v in self.heads.values()))
         params = model.state_dict()
         with safe_open(str(weights), framework="pt") as f:
             keys = set(f.keys())
@@ -216,7 +223,7 @@ class ChessTagger:
             logits = self.model(enc["input_ids"].to(self.device), enc["attention_mask"].to(self.device)).float().cpu()
             for j, (text, offsets) in enumerate(zip(chunk, enc["offset_mapping"].tolist())):
                 n = int(enc["attention_mask"][j].sum())
-                results.append(decode(text, offsets[:n], logits[j, :n], first_move_new[i + j]))
+                results.append(decode(text, offsets[:n], logits[j, :n], first_move_new[i + j], self.heads))
         return results
 
     def tag(self, text: str) -> dict:
