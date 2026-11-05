@@ -15,6 +15,8 @@ const UCI = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/;
 const TWO_SQUARES = /([a-h][1-8])\s*(?:-|x|→|->|to)\s*([a-h][1-8])/;
 const MATE_WORD = /mate\b/i;
 const CHECK_WORD = /\bcheck/i;
+// "I mate in 5", "they mate me in 4": a forced mate ahead, which takes an engine to check. "Mate in one" takes a move.
+const MATE_IN = /mated?\b(?:\s+\w+)?\s+in\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/i;
 const NEGATED_END = /(\bnot\b|n't|\bno\b|\bnever\b|\bwithout\b)\s+(?:\w+\s+){0,2}(?:check|mate|checkmate|over|the end|finish)/i;
 const REACH = /reach|go to|move to|get to|land on|jump to/i;
 const NEGATIVE_EVAL_SRC = "mistake|blunder|error|loses|losing|fails|falls short|\\bbad\\b|weak|wrong|refuted|dubious|too slow|inferior|goes nowhere|insufficient|harmless|toothless|premature|\\bdud\\b|pointless|misses|throws away|lets .{0,20}off|backfires|careless|risky|inaccura|"
@@ -86,7 +88,10 @@ export function resolveMove(fen, text, answered = null) {
   let fromSquare = null;
   if (two) { fromSquare = two[1]; candidates = candidates.filter((x) => x.to === two[2]); }
   else if (squares.length) {
-    candidates = candidates.filter((x) => x.to === squares.at(-1));
+    // "their pawn on c6 can take it": the square comes before the capture, so it is where the piece stands
+    const standsThere = answered && squares.length === 1 && RECAPTURE.test(t.slice(t.search(/\b[a-h][1-8]\b/) + 2));
+    if (standsThere) fromSquare = squares[0];
+    candidates = candidates.filter((x) => x.to === (standsThere ? answered : squares.at(-1)));
     if (squares.length > 1) fromSquare = squares[0];
   } else if (answered && RECAPTURE.test(t)) candidates = candidates.filter((x) => x.to === answered);
   const letter = t.match(/^([KQRBN])[a-h]/);
@@ -378,7 +383,11 @@ export function verify(fen, text, raw, best = null) {
 
   // 3. claims, linked to the nearest move/piece before them in their clause and the mentions after
   for (const [start, end, kind, frame] of claims) {
-    const { fen: frameFen, last, fallback } = frameOf(start, frame);
+    let { fen: frameFen, last, fallback } = frameOf(start, frame);
+    if ((kind === "CHECK" || kind === "MATE") && frame !== "NOW") { // "heads to f6 with check (Rf6+)": the move is written right after
+      const written = moves.find((mv) => mv.start >= end);
+      if (written?.after && /^\s*\($/.test(text.slice(end, written.start))) { frameFen = written.after; last = written; fallback = false; }
+    }
     fallbackNow = fallback;
     const claimText = text.slice(start, end);
     const negated = NEGATION.test(claimText);
@@ -405,9 +414,15 @@ export function verify(fen, text, raw, best = null) {
     let board = new Chess(frameFen);
 
     if (kind === "CHECK" || kind === "MATE") {
-      const value = kind === "CHECK" ? board.isCheck() : board.isCheckmate();
+      let value = kind === "CHECK" ? board.isCheck() : board.isCheckmate();
       // "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
       const negatedEnd = NEGATED_END.test(claimText);
+      const mateIn = kind === "MATE" && !negatedEnd ? text.slice(start, end + 12).match(MATE_IN) : null;
+      if (mateIn && !["1", "one"].includes(mateIn[1].toLowerCase())) {
+        fact(k, start, end, null, "mate in N: needs an engine", { ...extra, _line: last, _negated: false });
+        continue;
+      }
+      if (mateIn) value = value || board.moves({ verbose: true }).some((x) => givesMate(frameFen, x));
       fact(k, start, end, value !== negatedEnd, (value ? `${kind === "CHECK" ? "check" : "checkmate"} on the board` : `no ${kind === "CHECK" ? "check" : "mate"} on the board`)
         + (negatedEnd ? ", claim negated" : ""), { ...extra, _line: last, _negated: negatedEnd });
     } else if (kind === "WINS") {
