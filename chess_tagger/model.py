@@ -80,7 +80,9 @@ def bio_spans(text: str, offsets: list, labels: list[str]) -> list:
     for t, ((start, end), label) in enumerate(zip(offsets, labels)):
         while start < end and text[start].isspace():
             start += 1
-        if start == end or label == "O":
+        if start == end:  # a lone space token ("mate in", " ", "5") neither opens nor closes a span
+            continue
+        if label == "O":
             inside = False
             continue
         tag, kind = label.split("-", 1)
