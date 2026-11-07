@@ -1,7 +1,9 @@
 # v3.4 on generated reflections (2026-11-04)
 
 Trained from the v3.3 weights: the 3,701 existing training texts (hand-labelled ones twice) plus 1,500 generated ones, 4 epochs
-at lr 2e-5, window 1024, on the Mac (about 7 min per epoch; epoch 3 kept). Not released, and the browser model is not rebuilt.
+at lr 2e-5, window 1024, on the Mac (about 7 min per epoch; epoch 3 kept). Published on the Hub as
+[manoletre/chess-move-tagger](https://huggingface.co/manoletre/chess-move-tagger) (tag `v3.4`), with the 4-bit ONNX export
+(0.986 / 0.936 mentions / claims on real reflections, 0.981 on commentary).
 
 ```bash
 python scripts/train.py --init chess-move-tagger --out chess-move-tagger-v3.4 --epochs 4 --lr 2e-5 --max-length 1024 \
