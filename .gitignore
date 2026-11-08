@@ -8,3 +8,7 @@ chess-move-tagger/
 web/model/
 web/.vercel/
 web/.env*
+# later versions of the trained model
+chess-move-tagger-*/
+# built by scripts/generated_labels.py
+data/generated/*.jsonl

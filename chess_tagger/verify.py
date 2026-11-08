@@ -54,7 +54,9 @@ SENTENCE_END = re.compile(r"[.;!?\n]")
 RECAPTURE = re.compile(r"\b(recaptur\w*|takes? (it|back)|captur\w* (it|back)|retak\w*)\b", re.I)
 MATE_WORD = re.compile(r"mate\b", re.I)
 CHECK_WORD = re.compile(r"\bcheck", re.I)
-BLOCK = re.compile(r"\b(block\w*|interpos\w*)\b", re.I)
+# "I mate in 5", "they mate me in 4": a forced mate ahead, which takes an engine to check. "Mate in one" takes a move.
+MATE_IN = re.compile(r"mated?\b(?:\s+\w+)?\s+in\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b", re.I)
+BLOCK =re.compile(r"\b(block\w*|interpos\w*)\b", re.I)
 # wording that takes back an earlier verdict: rejecting a move and then choosing it after this is not a contradiction
 REVISION = re.compile(r"\b(actually|on second thought|wait|reconsider\w*|in fact|after all|on closer (?:look|inspection)|"
                       r"looking again|look again|i was wrong|correction|re-?evaluat\w*|but no)\b", re.I)
@@ -132,6 +134,9 @@ def resolve_move(board: chess.Board, text: str, answered: int | None = None):
         candidates = [mv for mv in candidates if mv.to_square == to]
     elif squares:
         to = chess.parse_square(squares[-1])
+        # "their pawn on c6 can take it": the square comes before the capture, so it is where the piece stands
+        if answered is not None and len(squares) == 1 and RECAPTURE.search(t, SQUARE.search(t).end()):
+            from_square, to = to, answered
         candidates = [mv for mv in candidates if mv.to_square == to]
         if len(squares) >= 2:
             from_square = chess.parse_square(squares[0])
@@ -457,6 +462,10 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
     for c in claims:
         start, end, kind, frame = c[0], c[1], c[2], (c[3] if len(c) > 3 else None)
         board, last_move, fallback = frame_board(c, frame)
+        if kind in ("CHECK", "MATE") and frame != "NOW":  # "heads to f6 with check (Rf6+)": the move is written right after
+            written = next((mv for mv in moves if mv[0] >= end), None)
+            if written is not None and written[4] is not None and re.fullmatch(r"\s*\(", text[end:written[0]]):
+                board, last_move, fallback = written[4], written, False
         state["fallback"] = fallback
         claim_text = text[start:end]
         negated = bool(NEGATION.search(claim_text))
@@ -481,6 +490,12 @@ def verify(fen: str, text: str, tagged: dict, played: str | None = None, best: s
             value = board.is_check() if kind == "CHECK" else board.is_checkmate()
             # "there is no defence", "can't parry it" claim mate: only a negated mate/check word negates it
             negated = bool(NEGATED_END.search(claim_text))
+            mate_in = MATE_IN.search(text[start:end + 12]) if kind == "MATE" and not negated else None
+            if mate_in and mate_in.group(1).lower() not in ("1", "one"):
+                fact("mate", c, None, "mate in N: needs an engine", line=last_move)
+                continue
+            if mate_in:
+                value = value or any(_gives_mate(board, mv) for mv in board.legal_moves)
             fact(kind.lower(), c, value != negated, "negated" if negated else "", line=last_move)
         elif kind == "WINS":
             mv = next((x for x in moves if subject and x[0] == subject[0]), last_move)

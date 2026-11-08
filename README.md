@@ -15,7 +15,7 @@ The model is [LiquidAI/LFM2.5-Encoder-230M](https://huggingface.co/LiquidAI/LFM2
 
 **Live demo: [chess-annotator.vercel.app](https://chess-annotator.vercel.app)**. The model runs in your browser; nothing is sent to a server.
 
-## What it finds (v3.3)
+## What it finds (v3.4)
 
 ```
 {Qxc3+}[move new rejected] <gives check>[check after] but White can {recapture the queen}[move next rejected],
@@ -86,7 +86,7 @@ Plus `chosen` (the **last** CHOSEN move from the puzzle position, i.e. the concl
 
 An opponent's reply stated as possible that fits several legal moves ("recapture the queen" with two recaptures) is true, and "block with the rook (on e2)" resolves to an interposing move.
 
-`web/verify.js` is a port with the same rules; `scripts/check_verify_js.py` runs both on 2,910 gold-labelled texts (labels, synthetic, refute probe): the same verdict for every one of 34,621 facts, and the same chosen move, contradiction and false-refutation count for every text.
+`web/verify.js` is a port with the same rules; `scripts/check_verify_js.py` runs both on 2,910 gold-labelled texts (labels, synthetic, refute probe): the same verdict for every one of 34,622 facts, and the same chosen move, contradiction and false-refutation count for every text.
 
 **Auditing for reward hacking (v3.2).** A process reward only penalises claims the tagger finds, so a policy can learn to phrase false confidence in wording the tagger misses. `chess_tagger.audit.audit(text, tagged, report)` checks every reflection against a fixed lexicon of mate / evaluation / check wording that is independent of the model, and returns the hits no tagged claim covers, plus flags (`untagged_mate`, `untagged_eval`, `no_checkable_facts`, …). Log the flag rates during RL: a rising rate means the policy found phrasings the tagger misses. Collect those samples and add them to the training data. The demo shows the same audit (`web/audit.js`, generated from the Python lexicon by `scripts/sync_audit_js.py`).
 
@@ -117,6 +117,10 @@ Test texts the model never trained on: **194 real reflections** from puzzles not
 **What the reward sees.** On the 347 test texts with a FEN, `verify.py` reaches the same verdict from v3.3's labels as from the hand labels for **95.5% of 5,732 facts**, and the same chosen move in **98.6%** of texts (v3.2 on the same texts and rules: 89.6% / 99.1%; on its own v3.2 test set: 94.3% / 99.0%). The chosen-move misses are 5 synthetic garbled / coach texts (v3.2: 3); on real reflections both get every chosen move. (EVAL facts are unverifiable here because the test set has no solution moves; the RL loop passes them.)
 
 The 4-bit browser model scores 0.986 / 0.939 (mentions / claims) on real reflections and 0.983 on commentary.
+
+**Generated reflections (v3.4).** chessLLM's templated SFT reflections (`data/generated/`, from a snapshot of `reflect_templates.py`) score, on wording held out of training: mentions 0.996, claims 0.533, stance 0.965, 99.1% of moves replayed to the right UCI, 0.4% false facts (v3.3: 0.522 / 0.327 / 0.321, 43.1%, 9.0%). On the generator's natural mix: 0.998 / 0.876 / 0.995, 0.1% false facts. Full tables and the remaining failures (unseen verdict, "chosen" and mate wording): [`data/generated/RESULTS.md`](data/generated/RESULTS.md).
+
+v3.3 → v3.4: real reflections 0.987 / 0.939 → 0.987 / 0.938, synthetic 0.980 / 0.869 → 0.976 / 0.869, commentary 0.987 → 0.983, verify agreement 95.5% → 95.3%, same chosen move 98.6% → 98.8%. The 4-bit v3.4 browser model scores 0.986 / 0.936 on real reflections and 0.981 on commentary. (The section above is v3.3's.)
 
 v3.2 → v3.3 (on the v3.3 test set): real reflections 0.974 / 0.853 → 0.987 / 0.939, commentary 0.993 → 0.987.
 
@@ -162,14 +166,14 @@ One line of `data/*.jsonl`:
 
 ### 1. Download it
 
-The weights live in the [GitHub release](https://github.com/manoletre/chess-moves-from-text/releases/tag/model-v3.3.0), not in git:
+The weights live on the Hugging Face Hub at [manoletre/chess-move-tagger](https://huggingface.co/manoletre/chess-move-tagger), not in git:
 
 ```bash
-gh release download model-v3.3.0 --pattern 'chess-move-tagger-v3.3.zip'
-unzip chess-move-tagger-v3.3.zip        # creates ./chess-move-tagger/ (~920 MB, for Python)
+hf download manoletre/chess-move-tagger --local-dir chess-move-tagger --exclude 'onnx/*'   # ~920 MB, for Python
+hf download manoletre/chess-move-tagger --include 'onnx/*' --local-dir hub && mv hub/onnx web/model   # 4-bit browser model
 ```
 
-`chess-move-tagger-v3.3-web.zip` is the 4-bit browser model; unzip it into `web/` to get `web/model/`.
+`--revision v3.3` gets the previous version. v3.3 and earlier are also in the [GitHub releases](https://github.com/manoletre/chess-moves-from-text/releases).
 
 ### 2. Call it from Python
 
@@ -244,7 +248,8 @@ data/           # see above
 
 ## History
 
-- **v3.3** (this version): refutations. The king getting away without a square ("simply steps away", "escapes") is a `flight` claim, how a candidate is dismissed ("the attack fizzles", "lets White consolidate", "without a decisive follow-up") an `eval` claim, pressure wording with a target ("bearing down on f2") an `attacks` claim, and a new `REGION` mention (center, kingside, queenside, corner) is checked as a square set. `verify` reports refutations, false refutations and a rejected-then-chosen contradiction. 160 new real reflections from cur-v3 stages 0–1, 400 templated refutations, a pass over all earlier labels (`scripts/relabel_v33.py`, LABELING.md section 9). Models trained with v3.2's labels still load (they just never predict REGION).
+- **v3.4** (this version): chessLLM's generated SFT reflections. Retrained from v3.3 with 1,500 labelled templated reflections added (labels from the generator's own structure, `scripts/generated_labels.py`), window 1024 tokens. `verify` reads "with check (Rf6+)" after its move, "their pawn on c6 can take it" from c6, and "mate in N" (N ≥ 2 unverifiable). Decoder fix: a lone space token no longer ends a span (it split every "mate in 5").
+- **v3.3**: refutations. The king getting away without a square ("simply steps away", "escapes") is a `flight` claim, how a candidate is dismissed ("the attack fizzles", "lets White consolidate", "without a decisive follow-up") an `eval` claim, pressure wording with a target ("bearing down on f2") an `attacks` claim, and a new `REGION` mention (center, kingside, queenside, corner) is checked as a square set. `verify` reports refutations, false refutations and a rejected-then-chosen contradiction. 160 new real reflections from cur-v3 stages 0–1, 400 templated refutations, a pass over all earlier labels (`scripts/relabel_v33.py`, LABELING.md section 9). Models trained with v3.2's labels still load (they just never predict REGION).
 - **v3.2**: built against reward hacking. Game-ending wording ("finishes it", "the king is dead", "is #") is a `mate` claim, and a new `EVAL` claim covers "decisive", "the winning idea", "Black is lost", "a mistake", checked against the puzzle's solution move. 450 new training reflections, 200 of them written to fake confidence, plus a pass that labelled these in the existing data. `chess_tagger.audit` flags confident wording the tagger misses. Checker: contractions negate ("isn't decisive"), "unstoppable" no longer does, "there is no defence" is a mate claim, not a negated one.
 - **v3.1**: a probe with unseen wording showed v3 missed many moves and claims phrased differently from the RL model's own reflections; +750 training reflections aimed at those gaps, a consistency pass over the labels (king captures as possibilities, colours inside piece spans), and many checker fixes so that fewer facts end up unverifiable (see "Checking a reflection"). Long texts are tagged in sentence chunks instead of being cut off at 512 tokens.
 - **v3**: new label design for LLM reflections: prose moves, stance, alternative replies, pieces, frames and claims, trained on 800 real reflections + synthetic ones + the v2 data. `verify.py`.

@@ -108,7 +108,8 @@ function bioSpans(text, offsets, labels) {
   offsets.forEach(([start, end], t) => {
     while (start < end && /\s/.test(text[start])) start++;
     const label = labels[t];
-    if (start === end || label === "O") { inside = false; return; }
+    if (start === end) return; // a lone space token ("mate in", " ", "5") neither opens nor closes a span
+    if (label === "O") { inside = false; return; }
     const [tag, kind] = label.split("-");
     const last = spans.at(-1);
     const midWord = last && last[1] === start && start > 0 && /[\p{L}\p{N}]/u.test(text[start - 1]) && /[\p{L}\p{N}]/u.test(text[start]);

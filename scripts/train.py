@@ -24,7 +24,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from safetensors.torch import save_model
+from safetensors.torch import load_model, save_model
 from torch.utils.data import DataLoader
 from transformers import AutoModelForMaskedLM, AutoTokenizer, get_linear_schedule_with_warmup
 
@@ -88,6 +88,11 @@ def main():
     parser.add_argument("--oversample", type=int, default=2, help="repeat fully labelled texts this many times")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--init", type=Path, help="start from these weights (a model folder) instead of the base model")
+    parser.add_argument("--max-length", type=int, default=MAX_LENGTH)
+    parser.add_argument("--extra-train", type=Path, help="more fully labelled texts (scripts/generated_labels.py)")
+    parser.add_argument("--extra-val", type=Path, help="also select the epoch on these: mean of both headlines")
+    parser.add_argument("--max-steps", type=int, default=0, help="stop after this many steps (to time a run)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -98,19 +103,24 @@ def main():
     if args.limit:
         train, val = train[:args.limit], val[:args.limit // 2]
     val_refl = [e for e in val if e["group"] == "reflection"] or val
-    print(f"device {device} | train {len(train)} | val {len(val)} ({len(val_refl)} reflections)")
+    read = lambda path: [json.loads(line) for line in path.read_text().splitlines()]
+    extra_val = read(args.extra_val) if args.extra_val else []
+    if args.extra_train:
+        train += read(args.extra_train)
+    print(f"device {device} | train {len(train)} | val {len(val)} ({len(val_refl)} reflections) | extra val {len(extra_val)}")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True)
     tokenizer.padding_side = "right"
 
     def encode(example):
-        enc = tokenizer(example["text"], return_offsets_mapping=True, truncation=True, max_length=MAX_LENGTH)
+        enc = tokenizer(example["text"], return_offsets_mapping=True, truncation=True, max_length=args.max_length)
         return {"input_ids": enc["input_ids"], **token_labels(example["text"], enc["offset_mapping"], example)}
 
     features = []
     for example in train:
         f = encode(example)
-        features += [f] * (args.oversample if example.get("labelled") == "full" else 1)
+        # generated texts are many and long: once per epoch, while the hand-labelled ones keep their weight
+        features += [f] * (args.oversample if example.get("labelled") == "full" and example["group"] != "generated" else 1)
 
     def collate(batch):
         width = max(len(b["input_ids"]) for b in batch)
@@ -121,10 +131,28 @@ def main():
             out[name] = torch.tensor([pad(b[name], IGNORE) for b in batch])
         return out
 
-    loader = DataLoader(features, batch_size=args.batch_size, shuffle=True, collate_fn=collate)
+    def similar_lengths():
+        """Shuffled batches of similar length, so a short text isn't padded to 800 tokens."""
+        order = random.sample(range(len(features)), len(features))
+        pools = [sorted(order[i:i + 50 * args.batch_size], key=lambda j: len(features[j]["input_ids"]))
+                 for i in range(0, len(order), 50 * args.batch_size)]
+        batches = [p[i:i + args.batch_size] for p in pools for i in range(0, len(p), args.batch_size)]
+        return random.sample(batches, len(batches))
+
+    class Batches:
+        def __iter__(self):
+            return iter(similar_lengths())
+
+        def __len__(self):
+            return len(features) // args.batch_size + 1
+
+    loader = DataLoader(features, batch_sampler=Batches(), collate_fn=collate)
     encoder = AutoModelForMaskedLM.from_pretrained(
         MODEL_ID, revision=MODEL_REVISION, code_revision=MODEL_REVISION, trust_remote_code=True).lfm2
-    model = ChessMoveTagger(encoder).to(device)
+    model = ChessMoveTagger(encoder)
+    if args.init:
+        load_model(model, str(args.init / "model.safetensors"))
+    model = model.to(device)
     slices = head_slices()
 
     @torch.no_grad()
@@ -134,7 +162,7 @@ def main():
         for i in range(0, len(examples), batch_size):
             texts = [e["text"] for e in examples[i:i + batch_size]]
             enc = tokenizer(texts, return_offsets_mapping=True, padding=True, truncation=True,
-                            max_length=MAX_LENGTH, return_tensors="pt")
+                            max_length=args.max_length, return_tensors="pt")
             logits = model(enc["input_ids"].to(device), enc["attention_mask"].to(device)).float().cpu()
             for j, (text, offsets) in enumerate(zip(texts, enc["offset_mapping"].tolist())):
                 n = int(enc["attention_mask"][j].sum())
@@ -149,7 +177,12 @@ def main():
     model.train()
     for epoch in range(1, args.epochs + 1):
         started, losses = time.time(), []
-        for batch in loader:
+        for step, batch in enumerate(loader):
+            if args.max_steps and step == args.max_steps:
+                seconds = time.time() - started
+                print(f"{args.max_steps} steps in {seconds:.0f}s; {len(loader)} steps per epoch "
+                      f"-> about {seconds / args.max_steps * len(loader) / 60:.0f} min per epoch")
+                return
             batch = {k: v.to(device) for k, v in batch.items()}
             logits = model(batch["input_ids"], batch["attention_mask"])
             loss = 0.0
@@ -167,7 +200,12 @@ def main():
         metrics = score(val_refl, predict(val_refl))
         all_val = score(val, predict(val))
         h = headline(metrics)
-        history.append({"epoch": epoch, "loss": sum(losses) / len(losses), "headline": h, "val_reflections": metrics})
+        extra = score(extra_val, predict(extra_val, 8)) if extra_val else None
+        if extra:
+            h = (h + headline(extra)) / 2
+            print(f"  extra val: {summary(extra)}", flush=True)
+        history.append({"epoch": epoch, "loss": sum(losses) / len(losses), "headline": h, "val_reflections": metrics,
+                        "extra_val": extra})
         saved = h > best
         if saved:
             best = h
@@ -175,8 +213,8 @@ def main():
             save_model(model, str(args.out / "model.safetensors"))
             tokenizer.save_pretrained(args.out)
             (args.out / "tagger_config.json").write_text(json.dumps(
-                {"base_model": MODEL_ID, "base_revision": MODEL_REVISION, "heads": HEADS, "max_length": MAX_LENGTH,
-                 "version": "3.3.0"}, indent=2))
+                {"base_model": MODEL_ID, "base_revision": MODEL_REVISION, "heads": HEADS, "max_length": args.max_length,
+                 "version": "3.4.0"}, indent=2))
         print(f"epoch {epoch} ({time.time() - started:.0f}s) loss {history[-1]['loss']:.4f} | "
               f"val reflections: {summary(metrics)} | all val mention F1 {all_val['mention']['f1']:.3f}"
               + ("  ✓ saved" if saved else ""), flush=True)
